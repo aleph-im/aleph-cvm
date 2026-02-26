@@ -5,8 +5,8 @@ version.workspace = true
 
 [dependencies]
 aleph-tee = { path = "../aleph-tee" }
-actix-web.workspace = true
-rustls.workspace = true
+actix-web = { workspace = true, features = ["rustls-0_23"] }
+rustls = { workspace = true, features = ["ring"] }
 rcgen.workspace = true
 tokio.workspace = true
 reqwest.workspace = true

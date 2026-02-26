@@ -6,6 +6,9 @@ members = [
     "crates/aleph-attest-agent",
     "crates/aleph-attest-cli",
 ]
+exclude = [
+    "nix/fib-service",
+]
 
 [workspace.package]
 edition = "2024"
