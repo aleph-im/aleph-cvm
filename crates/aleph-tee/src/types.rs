@@ -1,1 +1,187 @@
-// TODO
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeeType {
+    SevSnp,
+    Tdx,
+    NvidiaCc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationReport {
+    pub tee_type: TeeType,
+    #[serde(with = "hex_serde")]
+    pub data: Vec<u8>,
+    #[serde(with = "hex_serde_array")]
+    pub report_data: [u8; 64],
+    #[serde(with = "hex_serde")]
+    pub measurement: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResult {
+    pub valid: bool,
+    pub tee_type: TeeType,
+    pub summary: String,
+    #[serde(with = "hex_serde")]
+    pub measurement: Vec<u8>,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmConfig {
+    pub vm_id: String,
+    pub kernel: std::path::PathBuf,
+    pub initrd: std::path::PathBuf,
+    pub rootfs: Option<std::path::PathBuf>,
+    pub vcpus: u32,
+    pub memory_mb: u32,
+    pub tee: TeeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeeConfig {
+    pub backend: TeeType,
+    pub policy: Option<String>,
+}
+
+/// Serde helper for hex-encoding `Vec<u8>` fields.
+mod hex_serde {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        hex::decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Serde helper for hex-encoding `[u8; 64]` fields.
+mod hex_serde_array {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 64], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 64], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+        let array: [u8; 64] = bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected exactly 64 bytes"))?;
+        Ok(array)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tee_type_serialization() {
+        // Serialize SevSnp to JSON
+        let json = serde_json::to_string(&TeeType::SevSnp).unwrap();
+        assert_eq!(json, "\"sev-snp\"");
+
+        // Verify other variants too
+        assert_eq!(serde_json::to_string(&TeeType::Tdx).unwrap(), "\"tdx\"");
+        assert_eq!(
+            serde_json::to_string(&TeeType::NvidiaCc).unwrap(),
+            "\"nvidia-cc\""
+        );
+
+        // Deserialize back
+        let deserialized: TeeType = serde_json::from_str("\"sev-snp\"").unwrap();
+        assert_eq!(deserialized, TeeType::SevSnp);
+    }
+
+    #[test]
+    fn test_attestation_report_roundtrip() {
+        let report = AttestationReport {
+            tee_type: TeeType::SevSnp,
+            data: vec![0xde, 0xad, 0xbe, 0xef],
+            report_data: [0x42; 64],
+            measurement: vec![0x01, 0x02, 0x03],
+        };
+
+        let json = serde_json::to_string(&report).unwrap();
+        let deserialized: AttestationReport = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.tee_type, report.tee_type);
+        assert_eq!(deserialized.data, report.data);
+        assert_eq!(deserialized.report_data, report.report_data);
+        assert_eq!(deserialized.measurement, report.measurement);
+
+        // Verify hex encoding is present in the JSON
+        assert!(json.contains("deadbeef"));
+        assert!(json.contains(&"42".repeat(64)));
+        assert!(json.contains("010203"));
+    }
+
+    #[test]
+    fn test_vm_config_deserialization() {
+        let json = r#"{
+            "vm_id": "test-vm-001",
+            "kernel": "/boot/vmlinuz",
+            "initrd": "/boot/initrd.img",
+            "rootfs": "/images/rootfs.ext4",
+            "vcpus": 4,
+            "memory_mb": 2048,
+            "tee": {
+                "backend": "sev-snp",
+                "policy": "0x30000"
+            }
+        }"#;
+
+        let config: VmConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.vm_id, "test-vm-001");
+        assert_eq!(config.kernel, std::path::PathBuf::from("/boot/vmlinuz"));
+        assert_eq!(config.initrd, std::path::PathBuf::from("/boot/initrd.img"));
+        assert_eq!(
+            config.rootfs,
+            Some(std::path::PathBuf::from("/images/rootfs.ext4"))
+        );
+        assert_eq!(config.vcpus, 4);
+        assert_eq!(config.memory_mb, 2048);
+        assert_eq!(config.tee.backend, TeeType::SevSnp);
+        assert_eq!(config.tee.policy, Some("0x30000".to_string()));
+    }
+
+    #[test]
+    fn test_vm_config_optional_fields() {
+        let json = r#"{
+            "vm_id": "test-vm-002",
+            "kernel": "/boot/vmlinuz",
+            "initrd": "/boot/initrd.img",
+            "rootfs": null,
+            "vcpus": 2,
+            "memory_mb": 1024,
+            "tee": {
+                "backend": "tdx",
+                "policy": null
+            }
+        }"#;
+
+        let config: VmConfig = serde_json::from_str(json).unwrap();
+        assert!(config.rootfs.is_none());
+        assert_eq!(config.tee.backend, TeeType::Tdx);
+        assert!(config.tee.policy.is_none());
+    }
+}
