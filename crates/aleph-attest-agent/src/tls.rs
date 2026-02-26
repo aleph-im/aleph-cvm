@@ -17,6 +17,8 @@ pub struct AttestedTlsIdentity {
     /// DER-encoded PKCS#8 private key.
     pub key_der: Vec<u8>,
     /// The attestation report that was embedded in the certificate.
+    /// Retained for programmatic access (e.g. logging, diagnostics).
+    #[allow(dead_code)]
     pub report: AttestationReport,
 }
 

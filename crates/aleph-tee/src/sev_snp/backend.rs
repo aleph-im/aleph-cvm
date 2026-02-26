@@ -151,13 +151,15 @@ mod tests {
         let backend = SevSnpBackend::new("Milan");
 
         // Create a valid report using the sev crate encoder
-        let mut sev_report = SevAR::default();
-        sev_report.version = 3;
-        sev_report.report_data = [0x42; 64];
-        sev_report.measurement = [0xAB; 48];
-        sev_report.cpuid_fam_id = Some(0x19);
-        sev_report.cpuid_mod_id = Some(0x01);
-        sev_report.cpuid_step = Some(0x00);
+        let mut sev_report = SevAR {
+            version: 3,
+            report_data: [0x42; 64],
+            measurement: [0xAB; 48],
+            cpuid_fam_id: Some(0x19),
+            cpuid_mod_id: Some(0x01),
+            cpuid_step: Some(0x00),
+            ..Default::default()
+        };
         sev_report.chip_id[0] = 1;
 
         let mut buf = Vec::new();
@@ -186,13 +188,15 @@ mod tests {
         let backend = SevSnpBackend::new("Milan");
 
         // Create a valid report
-        let mut sev_report = SevAR::default();
-        sev_report.version = 3;
-        sev_report.report_data = [0x42; 64];
-        sev_report.measurement = [0xAB; 48];
-        sev_report.cpuid_fam_id = Some(0x19);
-        sev_report.cpuid_mod_id = Some(0x01);
-        sev_report.cpuid_step = Some(0x00);
+        let mut sev_report = SevAR {
+            version: 3,
+            report_data: [0x42; 64],
+            measurement: [0xAB; 48],
+            cpuid_fam_id: Some(0x19),
+            cpuid_mod_id: Some(0x01),
+            cpuid_step: Some(0x00),
+            ..Default::default()
+        };
         sev_report.chip_id[0] = 1;
 
         let mut buf = Vec::new();

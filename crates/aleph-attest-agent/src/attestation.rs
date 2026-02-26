@@ -129,7 +129,7 @@ mod tests {
         let report = get_nonce_bound_report(&backend, &nonce).unwrap();
 
         // Long nonce should be hashed with SHA-384, then zero-padded.
-        let expected_hash = Sha384::digest(&nonce);
+        let expected_hash = Sha384::digest(nonce);
         assert_eq!(&report.report_data[..48], expected_hash.as_slice());
         assert_eq!(&report.report_data[48..], &[0u8; 16]);
     }

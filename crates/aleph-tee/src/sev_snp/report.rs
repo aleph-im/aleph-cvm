@@ -92,15 +92,16 @@ mod tests {
         use sev::firmware::guest::AttestationReport as SevAR;
         use sev::parser::Encoder;
 
-        let mut report = SevAR::default();
-        report.version = 3;
-        report.report_data = [0x42; 64];
-        report.measurement = [0xAB; 48];
-        // Set cpuid fields for V3 (needs valid cpu family/model for Generation identification).
-        // Family 0x19, Model 0x01 => Milan
-        report.cpuid_fam_id = Some(0x19);
-        report.cpuid_mod_id = Some(0x01);
-        report.cpuid_step = Some(0x00);
+        let mut report = SevAR {
+            version: 3,
+            report_data: [0x42; 64],
+            measurement: [0xAB; 48],
+            // Family 0x19, Model 0x01 => Milan
+            cpuid_fam_id: Some(0x19),
+            cpuid_mod_id: Some(0x01),
+            cpuid_step: Some(0x00),
+            ..Default::default()
+        };
         // chip_id must be non-zero for the encoder
         report.chip_id[0] = 1;
 

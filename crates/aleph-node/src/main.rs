@@ -1,8 +1,3 @@
-mod api;
-mod network;
-mod qemu;
-mod vm;
-
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +8,9 @@ use tracing::info;
 
 use aleph_tee::sev_snp::SevSnpBackend;
 
-use crate::vm::VmManager;
+use aleph_node::api;
+use aleph_node::network;
+use aleph_node::vm::VmManager;
 
 #[derive(Parser)]
 #[command(name = "aleph-node", about = "Aleph CVM Node — manages confidential QEMU VMs")]

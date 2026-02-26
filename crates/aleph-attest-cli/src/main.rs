@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         println!("Fresh attestation verified successfully!");
         println!("  TEE type:     {:?}", report.tee_type);
         println!("  Measurement:  {}", hex::encode(&report.measurement));
-        println!("  Report data:  {}", hex::encode(&report.report_data));
+        println!("  Report data:  {}", hex::encode(report.report_data));
     } else {
         // Layer 2: TLS-bound attestation verification
         println!("Making attested request to {}...", cli.url);

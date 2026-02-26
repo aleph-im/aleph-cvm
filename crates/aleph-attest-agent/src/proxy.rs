@@ -77,10 +77,10 @@ pub async fn proxy_handler(
 
     // Forward relevant headers (skip Host since reqwest sets it).
     for (name, value) in req.headers() {
-        if name != actix_web::http::header::HOST {
-            if let Ok(v) = value.to_str() {
-                proxy_req = proxy_req.header(name.as_str(), v);
-            }
+        if name != actix_web::http::header::HOST
+            && let Ok(v) = value.to_str()
+        {
+            proxy_req = proxy_req.header(name.as_str(), v);
         }
     }
 
