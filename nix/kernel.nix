@@ -1,22 +1,22 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 
 pkgs.linuxPackages_6_6.kernel.override {
-  structuredExtraConfig = with pkgs.lib.kernel; {
-    # SEV-SNP guest support
-    AMD_MEM_ENCRYPT = yes;
-    SEV_GUEST = yes;
-    CRYPTO_DEV_CCP = yes;
-    CRYPTO_DEV_CCP_DD = yes;
-    CRYPTO_DEV_SP_PSP = yes;
+  structuredExtraConfig = with lib.kernel; {
+    # SEV-SNP guest support (mkForce to override base config "m" → "y")
+    AMD_MEM_ENCRYPT = lib.mkForce yes;
+    SEV_GUEST = lib.mkForce yes;
+    CRYPTO_DEV_CCP = lib.mkForce yes;
+    CRYPTO_DEV_CCP_DD = lib.mkForce yes;
+    CRYPTO_DEV_SP_PSP = lib.mkForce yes;
 
     # Virtio (for disk and network)
-    VIRTIO = yes;
-    VIRTIO_PCI = yes;
-    VIRTIO_BLK = yes;
-    VIRTIO_NET = yes;
-    VIRTIO_CONSOLE = yes;
+    VIRTIO = lib.mkForce yes;
+    VIRTIO_PCI = lib.mkForce yes;
+    VIRTIO_BLK = lib.mkForce yes;
+    VIRTIO_NET = lib.mkForce yes;
+    VIRTIO_CONSOLE = lib.mkForce yes;
 
     # Minimal: no modules, everything built-in
-    MODULES = no;
+    MODULES = lib.mkForce no;
   };
 }
