@@ -1,0 +1,23 @@
+[package]
+name = "aleph-attest-agent"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+aleph-tee = { path = "../aleph-tee" }
+actix-web.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hex.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "aleph-node"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+aleph-tee = { path = "../aleph-tee" }
+actix-web.workspace = true
+tokio.workspace = true
+qapi.workspace = true
+qapi-qmp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true

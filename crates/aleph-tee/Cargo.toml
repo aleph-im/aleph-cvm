@@ -1,0 +1,24 @@
+[package]
+name = "aleph-tee"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sev.workspace = true
+rcgen.workspace = true
+x509-parser.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+const-oid.workspace = true
+openssl.workspace = true
+sha2.workspace = true
+hex.workspace = true
+pem.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true

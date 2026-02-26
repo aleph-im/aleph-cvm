@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aleph-tee",
+    "crates/aleph-node",
+    "crates/aleph-attest-agent",
+    "crates/aleph-attest-cli",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+# TEE
+sev = { version = "7", features = ["snp", "openssl"] }
+
+# Crypto and TLS
+rcgen = "0.14"
+rustls = "0.23"
+x509-parser = "0.16"
+x509-cert = "0.2"
+der = "0.7"
+const-oid = "0.9"
+openssl = "0.10"
+sha2 = "0.10"
+p384 = { version = "0.13", features = ["ecdsa"] }
+ring = "0.17"
+hex = "0.4"
+pem = "3"
+
+# HTTP
+actix-web = "4"
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+hyper-rustls = "0.27"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# QEMU
+qapi = { version = "0.15", features = ["qmp"] }
+qapi-qmp = "0.15"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Errors and logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+tokio-test = "0.4"
