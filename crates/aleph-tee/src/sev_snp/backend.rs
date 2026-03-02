@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use crate::traits::TeeBackend;
 use crate::types::{AttestationReport, TeeType, VerificationResult, VmConfig};
 
-use super::qemu::sev_snp_qemu_args;
+use super::qemu::{sev_snp_qemu_args, DEFAULT_OVMF_PATH};
 use super::report::{extract_measurement, extract_report_data, parse_sev_snp_report};
 
 /// SEV-SNP backend implementing the `TeeBackend` trait.
@@ -14,14 +14,25 @@ use super::report::{extract_measurement, extract_report_data, parse_sev_snp_repo
 pub struct SevSnpBackend {
     /// The AMD product name (e.g., "Milan", "Genoa", "Turin").
     pub product: String,
+    /// Path to the OVMF firmware binary used by QEMU.
+    pub ovmf_path: String,
 }
 
 impl SevSnpBackend {
     /// Create a new SEV-SNP backend for the given product line.
+    ///
+    /// Uses the default OVMF firmware path.
     pub fn new(product: impl Into<String>) -> Self {
         Self {
             product: product.into(),
+            ovmf_path: DEFAULT_OVMF_PATH.to_string(),
         }
+    }
+
+    /// Override the OVMF firmware path (builder pattern).
+    pub fn with_ovmf_path(mut self, ovmf_path: impl Into<String>) -> Self {
+        self.ovmf_path = ovmf_path.into();
+        self
     }
 }
 
@@ -87,7 +98,7 @@ impl TeeBackend for SevSnpBackend {
 
     /// Generate QEMU command-line arguments for launching an SEV-SNP VM.
     fn qemu_args(&self, config: &VmConfig) -> Vec<String> {
-        sev_snp_qemu_args(config)
+        sev_snp_qemu_args(config, &self.ovmf_path)
     }
 
     /// Parse raw bytes into a structured attestation report.
@@ -128,7 +139,7 @@ mod tests {
             vm_id: "test".to_string(),
             kernel: PathBuf::from("/boot/vmlinuz"),
             initrd: PathBuf::from("/boot/initrd.img"),
-            rootfs: None,
+            disks: vec![],
             vcpus: 2,
             memory_mb: 2048,
             tee: TeeConfig {

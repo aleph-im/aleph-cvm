@@ -5,13 +5,23 @@ use crate::types::VmConfig;
 /// 0x30000 enables SEV-SNP with SMT allowed and debug disabled.
 const DEFAULT_POLICY: &str = "0x30000";
 
+/// Default OVMF firmware path (AMD's SEV-SNP fork, installed by build-ovmf.sh).
+pub const DEFAULT_OVMF_PATH: &str = "/usr/local/share/ovmf-snp/OVMF.fd";
+
 /// Generate QEMU command-line arguments for launching an SEV-SNP confidential VM.
 ///
 /// Produces the following arguments:
 /// - `-machine q35,confidential-guest-support=sev0,memory-backend=ram1`
 /// - `-object memory-backend-memfd,id=ram1,size={memory_mb}M,share=true`
-/// - `-object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,policy={policy}`
-pub fn sev_snp_qemu_args(config: &VmConfig) -> Vec<String> {
+/// - `-object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on,policy={policy}`
+/// - `-bios <ovmf_path>` (SEV-SNP requires OVMF firmware)
+///
+/// `kernel-hashes=on` tells QEMU to populate the OVMF kernel hashing area with
+/// SHA-256 hashes of the kernel, initrd, and cmdline. The AmdSev OVMF variant's
+/// QemuKernelLoaderFsDxe uses BlobVerifierLibSevHashes to verify these hashes
+/// before loading the kernel — without this flag, the blob verifier fails and
+/// OVMF falls back to the embedded GRUB bootloader.
+pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
     let policy = config
         .tee
         .policy
@@ -20,16 +30,21 @@ pub fn sev_snp_qemu_args(config: &VmConfig) -> Vec<String> {
 
     vec![
         "-machine".to_string(),
-        "q35,confidential-guest-support=sev0,memory-backend=ram1".to_string(),
+        "q35,confidential-guest-support=sev0,memory-backend=ram1,vmport=off".to_string(),
         "-object".to_string(),
         format!(
-            "memory-backend-memfd,id=ram1,size={}M,share=true",
+            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M",
             config.memory_mb
         ),
         "-object".to_string(),
         format!(
-            "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,policy={policy}"
+            "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on,policy={policy}"
         ),
+        // Strip QEMU's default devices (USB, floppy, etc.) to reduce
+        // OVMF PCI enumeration time.
+        "-nodefaults".to_string(),
+        "-bios".to_string(),
+        ovmf_path.to_string(),
     ]
 }
 
@@ -44,7 +59,7 @@ mod tests {
             vm_id: "test-vm".to_string(),
             kernel: PathBuf::from("/boot/vmlinuz"),
             initrd: PathBuf::from("/boot/initrd.img"),
-            rootfs: None,
+            disks: vec![],
             vcpus: 2,
             memory_mb,
             tee: TeeConfig {
@@ -57,7 +72,7 @@ mod tests {
     #[test]
     fn test_sev_snp_args_with_policy() {
         let config = make_config(2048, Some("0x50000"));
-        let args = sev_snp_qemu_args(&config);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
         // Find the sev-snp-guest object arg
         let sev_arg = args
@@ -69,12 +84,16 @@ mod tests {
             sev_arg.contains("policy=0x50000"),
             "policy should be 0x50000 but got: {sev_arg}"
         );
+        assert!(
+            sev_arg.contains("kernel-hashes=on"),
+            "kernel-hashes should be on but got: {sev_arg}"
+        );
     }
 
     #[test]
     fn test_sev_snp_args_default_policy() {
         let config = make_config(2048, None);
-        let args = sev_snp_qemu_args(&config);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
         let sev_arg = args
             .iter()
@@ -85,12 +104,16 @@ mod tests {
             sev_arg.contains("policy=0x30000"),
             "default policy should be 0x30000 but got: {sev_arg}"
         );
+        assert!(
+            sev_arg.contains("kernel-hashes=on"),
+            "kernel-hashes should be on but got: {sev_arg}"
+        );
     }
 
     #[test]
     fn test_memory_backend_matches_config() {
         let config = make_config(4096, None);
-        let args = sev_snp_qemu_args(&config);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
         let mem_arg = args
             .iter()
@@ -106,13 +129,23 @@ mod tests {
     #[test]
     fn test_machine_arg_present() {
         let config = make_config(1024, None);
-        let args = sev_snp_qemu_args(&config);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
-        // Args should come in pairs: -machine <val>, -object <val>, -object <val>
-        assert_eq!(args.len(), 6, "expected 6 args (3 pairs), got {}", args.len());
+        // -machine <val>, -object <val>, -object <val>, -nodefaults, -bios <val>
+        assert_eq!(args.len(), 9, "expected 9 args, got {}", args.len());
         assert_eq!(args[0], "-machine");
         assert!(args[1].contains("q35"));
         assert!(args[1].contains("confidential-guest-support=sev0"));
         assert!(args[1].contains("memory-backend=ram1"));
+    }
+
+    #[test]
+    fn test_custom_ovmf_path() {
+        let config = make_config(1024, None);
+        let custom_path = "/opt/custom/OVMF.fd";
+        let args = sev_snp_qemu_args(&config, custom_path);
+
+        let bios_idx = args.iter().position(|a| a == "-bios").expect("-bios flag missing");
+        assert_eq!(args[bios_idx + 1], custom_path);
     }
 }

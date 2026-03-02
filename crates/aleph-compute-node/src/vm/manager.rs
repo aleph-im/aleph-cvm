@@ -1,0 +1,431 @@
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+use ipnet::Ipv6Net;
+use serde::Serialize;
+use tokio::sync::{Mutex, RwLock};
+use tracing::{error, info};
+
+use aleph_network::ipv4::port_forward::PortForwardState;
+use aleph_network::ipv6::Ipv6RangeAllocator;
+use aleph_network::ndp_proxy::NdpProxy;
+use aleph_network::nftables::NftablesManager;
+use aleph_network::types::{PortForward, Protocol};
+use aleph_tee::traits::TeeBackend;
+use aleph_tee::types::VmConfig;
+
+use crate::network;
+use crate::qemu::args::{build_qemu_command, QemuPaths};
+use crate::qemu::process::QemuProcess;
+use crate::vm::lifecycle::VmState;
+
+/// Internal handle for a managed VM.
+struct VmHandle {
+    config: VmConfig,
+    state: VmState,
+    ip: Ipv4Addr,
+    ipv6: Option<Ipv6Net>,
+    process: Option<QemuProcess>,
+    tap_name: String,
+    created_at: Instant,
+}
+
+/// JSON-serializable VM information returned by the API.
+#[derive(Debug, Clone, Serialize)]
+pub struct VmInfo {
+    pub vm_id: String,
+    pub status: String,
+    pub ip: String,
+    pub ipv6: String,
+    pub tee: String,
+    pub uptime_secs: u64,
+}
+
+impl VmInfo {
+    fn from_handle(handle: &VmHandle) -> Self {
+        Self {
+            vm_id: handle.config.vm_id.clone(),
+            status: handle.state.to_string(),
+            ip: handle.ip.to_string(),
+            ipv6: handle.ipv6.map(|n| n.to_string()).unwrap_or_default(),
+            tee: format!("{:?}", handle.config.tee.backend),
+            uptime_secs: handle.created_at.elapsed().as_secs(),
+        }
+    }
+}
+
+/// Manages the lifecycle of confidential VMs.
+pub struct VmManager {
+    vms: RwLock<HashMap<String, VmHandle>>,
+    run_dir: PathBuf,
+    bridge: String,
+    gateway_ip: Ipv4Addr,
+    next_ip_offset: RwLock<u8>,
+    tee_backend: Arc<dyn TeeBackend>,
+    dhcp_hostsdir: Option<PathBuf>,
+    nftables: NftablesManager,
+    port_forwards: Mutex<PortForwardState>,
+    ipv6_allocator: Option<Mutex<Ipv6RangeAllocator>>,
+    ndp_proxy: Option<Arc<NdpProxy>>,
+}
+
+impl VmManager {
+    /// Create a new VM manager.
+    ///
+    /// If `dhcp_hostsdir` is provided, the manager writes per-VM dnsmasq
+    /// DHCP host reservation files so that VMs get their assigned IP via DHCP.
+    ///
+    /// If `ipv6_pool` is provided, IPv6 addresses are allocated from that pool
+    /// and NDP proxy + ip6 nftables chains are enabled.
+    pub fn new(
+        run_dir: PathBuf,
+        bridge: String,
+        gateway_ip: Ipv4Addr,
+        tee_backend: Arc<dyn TeeBackend>,
+        dhcp_hostsdir: Option<PathBuf>,
+        external_interface: String,
+        ipv6_pool: Option<Ipv6Net>,
+        use_ndp_proxy: bool,
+    ) -> Self {
+        let ipv6_enabled = ipv6_pool.is_some();
+        let nftables = NftablesManager::new("aleph", &external_interface, ipv6_enabled);
+
+        let ipv6_allocator = ipv6_pool.map(|pool| Mutex::new(Ipv6RangeAllocator::new(pool, 128)));
+
+        let ndp_proxy = if ipv6_enabled && use_ndp_proxy {
+            Some(Arc::new(NdpProxy::new(&external_interface)))
+        } else {
+            None
+        };
+
+        Self {
+            vms: RwLock::new(HashMap::new()),
+            run_dir,
+            bridge,
+            gateway_ip,
+            next_ip_offset: RwLock::new(1),
+            tee_backend,
+            dhcp_hostsdir,
+            nftables,
+            port_forwards: Mutex::new(PortForwardState::new()),
+            ipv6_allocator,
+            ndp_proxy,
+        }
+    }
+
+    /// Initialize nftables supervisor chains. Call once at startup.
+    pub fn setup_nftables(&self) -> Result<()> {
+        self.nftables.initialize()
+    }
+
+    /// Create and start a new VM.
+    ///
+    /// If `requested_ipv6` is `Some`, the address is validated and allocated.
+    /// If `None` and an IPv6 pool is configured, a random /128 is allocated.
+    pub async fn create_vm(
+        &self,
+        config: VmConfig,
+        requested_ipv6: Option<Ipv6Net>,
+    ) -> Result<VmInfo> {
+        let vm_id = config.vm_id.clone();
+
+        // Check for duplicate
+        {
+            let vms = self.vms.read().await;
+            if vms.contains_key(&vm_id) {
+                anyhow::bail!("VM {vm_id} already exists");
+            }
+        }
+
+        // Allocate IP and derive MAC
+        let offset = {
+            let mut off = self.next_ip_offset.write().await;
+            let current = *off;
+            *off = off.wrapping_add(1);
+            current
+        };
+        let vm_ip = network::allocate_vm_ip(self.gateway_ip, offset);
+        let mac_addr = network::mac_for_vm_ip(vm_ip);
+
+        // Allocate IPv6 from pool (if enabled)
+        let vm_ipv6 = if let Some(ref alloc) = self.ipv6_allocator {
+            let mut alloc = alloc.lock().await;
+            Some(alloc.allocate(&vm_id, requested_ipv6)?)
+        } else {
+            None
+        };
+
+        // Write DHCP reservation so dnsmasq assigns this IP to the VM's MAC
+        if let Some(ref hostsdir) = self.dhcp_hostsdir {
+            network::write_dhcp_reservation(hostsdir, &vm_id, &mac_addr, vm_ip)
+                .context("failed to write DHCP reservation")?;
+
+            // Write DHCPv6 reservation if IPv6 is allocated
+            if let Some(ref ipv6) = vm_ipv6 {
+                if let Err(e) =
+                    network::write_dhcpv6_reservation(hostsdir, &vm_id, &mac_addr, ipv6.addr())
+                {
+                    network::remove_dhcp_reservation(hostsdir, &vm_id);
+                    if let Some(ref alloc) = self.ipv6_allocator {
+                        alloc.lock().await.release(&vm_id);
+                    }
+                    return Err(anyhow::anyhow!(e).context("failed to write DHCPv6 reservation"));
+                }
+            }
+        }
+
+        // Create TAP interface
+        let tap_name = format!("tap-{}", &vm_id);
+        if let Err(e) = network::create_tap(&tap_name, &self.bridge).await {
+            error!(vm_id = %vm_id, error = %e, "failed to create TAP interface");
+            self.cleanup_reservations(&vm_id, vm_ipv6.is_some());
+            return Err(e);
+        }
+
+        // Add IPv6 address to TAP interface
+        if let Some(ref ipv6) = vm_ipv6 {
+            if let Err(e) = network::add_ipv6_to_tap(&tap_name, *ipv6).await {
+                error!(vm_id = %vm_id, error = %e, "failed to add IPv6 to TAP");
+                let _ = network::delete_tap(&tap_name).await;
+                self.cleanup_reservations(&vm_id, true);
+                return Err(e);
+            }
+        }
+
+        // Set up nftables per-VM chains (NAT + filter)
+        if let Err(e) = self.nftables.setup_vm(&vm_id, &tap_name) {
+            error!(vm_id = %vm_id, error = %e, "failed to set up nftables for VM");
+            let _ = network::delete_tap(&tap_name).await;
+            self.cleanup_reservations(&vm_id, vm_ipv6.is_some());
+            return Err(e);
+        }
+
+        // Set up NDP proxy for IPv6
+        if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
+            ndp.add_range(&tap_name, *ipv6).await;
+        }
+
+        // Build QEMU command
+        let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
+        let mut args = vec!["qemu-system-x86_64".to_string()];
+        args.extend(build_qemu_command(
+            &config,
+            &paths,
+            &tap_name,
+            self.tee_backend.as_ref(),
+            &mac_addr,
+        ));
+
+        // Spawn QEMU
+        let process = match QemuProcess::spawn(&args, paths, vm_id.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                error!(vm_id = %vm_id, error = %e, "failed to spawn QEMU");
+                // Clean up everything on failure
+                if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
+                    ndp.delete_range(&tap_name).await;
+                    let _ = ipv6; // suppress unused warning
+                }
+                let _ = self.nftables.teardown_vm(&vm_id);
+                let _ = network::delete_tap(&tap_name).await;
+                self.cleanup_reservations(&vm_id, vm_ipv6.is_some());
+                return Err(e);
+            }
+        };
+
+        // Mark as Running immediately (no health check polling yet)
+        let handle = VmHandle {
+            config,
+            state: VmState::Running,
+            ip: vm_ip,
+            ipv6: vm_ipv6,
+            process: Some(process),
+            tap_name,
+            created_at: Instant::now(),
+        };
+
+        let info = VmInfo::from_handle(&handle);
+
+        self.vms.write().await.insert(vm_id.clone(), handle);
+        info!(vm_id = %vm_id, ip = %vm_ip, ipv6 = ?vm_ipv6, mac = %mac_addr, "VM created");
+
+        Ok(info)
+    }
+
+    /// Clean up DHCP/DHCPv6 reservations and IPv6 allocation on failure.
+    fn cleanup_reservations(&self, vm_id: &str, has_ipv6: bool) {
+        if let Some(ref hostsdir) = self.dhcp_hostsdir {
+            network::remove_dhcp_reservation(hostsdir, vm_id);
+            if has_ipv6 {
+                network::remove_dhcpv6_reservation(hostsdir, vm_id);
+            }
+        }
+        if has_ipv6 {
+            if let Some(ref alloc) = self.ipv6_allocator {
+                // Best-effort release; can't await in sync context, so use try_lock
+                if let Ok(mut alloc) = alloc.try_lock() {
+                    alloc.release(vm_id);
+                }
+            }
+        }
+    }
+
+    /// Get information about a specific VM.
+    pub async fn get_vm(&self, id: &str) -> Result<VmInfo> {
+        let vms = self.vms.read().await;
+        let handle = vms
+            .get(id)
+            .with_context(|| format!("VM {id} not found"))?;
+        Ok(VmInfo::from_handle(handle))
+    }
+
+    /// Delete a VM, stopping it if running.
+    pub async fn delete_vm(&self, id: &str) -> Result<()> {
+        let mut vms = self.vms.write().await;
+        let mut handle = vms
+            .remove(id)
+            .with_context(|| format!("VM {id} not found"))?;
+
+        // Kill the QEMU process if still running
+        if let Some(ref mut process) = handle.process {
+            let _ = process.wait_or_kill(std::time::Duration::from_secs(5));
+        }
+
+        // Remove port forwards for this VM
+        let removed_forwards = {
+            let mut pf = self.port_forwards.lock().await;
+            pf.remove_all_for_vm(id)
+        };
+        for fwd in &removed_forwards {
+            let _ = self.nftables.remove_port_forward(
+                fwd.host_port,
+                fwd.vm_port,
+                fwd.protocol,
+            );
+        }
+
+        // Remove NDP proxy range
+        if let Some(ref ndp) = self.ndp_proxy {
+            ndp.delete_range(&handle.tap_name).await;
+        }
+
+        // Release IPv6 allocation
+        if handle.ipv6.is_some() {
+            if let Some(ref alloc) = self.ipv6_allocator {
+                alloc.lock().await.release(id);
+            }
+        }
+
+        // Tear down nftables chains for this VM
+        let _ = self.nftables.teardown_vm(id);
+
+        // Clean up TAP interface
+        let _ = network::delete_tap(&handle.tap_name).await;
+
+        // Clean up DHCP/DHCPv6 reservations
+        if let Some(ref hostsdir) = self.dhcp_hostsdir {
+            network::remove_dhcp_reservation(hostsdir, &handle.config.vm_id);
+            if handle.ipv6.is_some() {
+                network::remove_dhcpv6_reservation(hostsdir, &handle.config.vm_id);
+            }
+        }
+
+        info!(vm_id = %id, "VM deleted");
+        Ok(())
+    }
+
+    /// List all VMs.
+    #[allow(dead_code)]
+    pub async fn list_vms(&self) -> Vec<VmInfo> {
+        let vms = self.vms.read().await;
+        vms.values().map(VmInfo::from_handle).collect()
+    }
+
+    /// Add a port forwarding rule for a VM.
+    pub async fn add_port_forward(
+        &self,
+        vm_id: &str,
+        host_port: u16,
+        vm_port: u16,
+        protocol: Protocol,
+    ) -> Result<PortForward> {
+        // Validate VM exists and get its IP
+        let guest_ip = {
+            let vms = self.vms.read().await;
+            let handle = vms
+                .get(vm_id)
+                .with_context(|| format!("VM {vm_id} not found"))?;
+            handle.ip
+        };
+
+        let actual_host_port = if host_port == 0 {
+            let pf = self.port_forwards.lock().await;
+            pf.auto_allocate(protocol, 10000)
+                .context("no available ports for auto-allocation")?
+        } else {
+            host_port
+        };
+
+        // Check availability
+        {
+            let pf = self.port_forwards.lock().await;
+            if !pf.is_available(actual_host_port, protocol) {
+                anyhow::bail!(
+                    "port {} ({}) is already in use",
+                    actual_host_port,
+                    protocol
+                );
+            }
+        }
+
+        // Add nftables rules
+        self.nftables
+            .add_port_forward(vm_id, guest_ip, actual_host_port, vm_port, protocol)?;
+
+        // Track state
+        let forward = PortForward {
+            vm_id: vm_id.to_string(),
+            host_port: actual_host_port,
+            vm_port,
+            protocol,
+        };
+
+        {
+            let mut pf = self.port_forwards.lock().await;
+            pf.add(forward.clone());
+        }
+
+        Ok(forward)
+    }
+
+    /// Remove a port forwarding rule.
+    pub async fn remove_port_forward(
+        &self,
+        host_port: u16,
+        protocol: Protocol,
+    ) -> Result<()> {
+        let forward = {
+            let mut pf = self.port_forwards.lock().await;
+            pf.remove(host_port, protocol)
+                .context("port forward not found")?
+        };
+
+        self.nftables
+            .remove_port_forward(host_port, forward.vm_port, protocol)?;
+
+        Ok(())
+    }
+
+    /// List port forwards, optionally filtered by VM ID.
+    pub async fn list_port_forwards(&self, vm_id: Option<&str>) -> Vec<PortForward> {
+        let pf = self.port_forwards.lock().await;
+        match vm_id {
+            Some(id) => pf.list_for_vm(id).into_iter().cloned().collect(),
+            None => pf.list_all().into_iter().cloned().collect(),
+        }
+    }
+}

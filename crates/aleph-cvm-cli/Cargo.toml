@@ -1,0 +1,29 @@
+[package]
+name = "aleph-cvm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aleph-cvm"
+path = "src/main.rs"
+
+[dependencies]
+aleph-compute-proto = { path = "../aleph-compute-proto" }
+
+# gRPC client
+tonic.workspace = true
+tower.workspace = true
+hyper-util.workspace = true
+
+# Async
+tokio.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Serialization
+serde_json.workspace = true
+
+# Errors
+anyhow.workspace = true

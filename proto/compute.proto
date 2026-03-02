@@ -1,0 +1,104 @@
+syntax = "proto3";
+package aleph.compute.v1;
+
+service ComputeNode {
+  rpc CreateVm(CreateVmRequest) returns (VmInfo);
+  rpc GetVm(GetVmRequest) returns (VmInfo);
+  rpc DeleteVm(DeleteVmRequest) returns (DeleteVmResponse);
+  rpc ListVms(ListVmsRequest) returns (ListVmsResponse);
+  rpc AddPortForward(AddPortForwardRequest) returns (PortForwardInfo);
+  rpc RemovePortForward(RemovePortForwardRequest) returns (RemovePortForwardResponse);
+  rpc ListPortForwards(ListPortForwardsRequest) returns (ListPortForwardsResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ─── VM lifecycle ───────────────────────────────────────────────────────────
+
+message CreateVmRequest {
+  string vm_id = 1;
+  string kernel = 2;
+  string initrd = 3;
+  repeated DiskConfig disks = 4;
+  uint32 vcpus = 5;
+  uint32 memory_mb = 6;
+  TeeConfig tee = 7;
+  string ipv6_address = 8;      // requested IPv6 (empty = random from pool)
+  uint32 ipv6_prefix_len = 9;   // requested prefix length (0 = /128)
+}
+
+message DiskConfig {
+  string path = 1;
+  bool readonly = 2;
+  string format = 3; // "raw", "qcow2"
+}
+
+message TeeConfig {
+  string backend = 1; // "sev-snp", "tdx", "nvidia-cc"
+  string policy = 2;  // empty string means default
+}
+
+message VmInfo {
+  string vm_id = 1;
+  string status = 2;     // defined/booting/running/stopping/stopped/failed
+  string ipv4 = 3;
+  string ipv6 = 4;
+  string tee_backend = 5;
+  uint64 uptime_secs = 6;
+}
+
+message GetVmRequest {
+  string vm_id = 1;
+}
+
+message DeleteVmRequest {
+  string vm_id = 1;
+}
+
+message DeleteVmResponse {}
+
+message ListVmsRequest {}
+
+message ListVmsResponse {
+  repeated VmInfo vms = 1;
+}
+
+// ─── Port forwarding ────────────────────────────────────────────────────────
+
+message AddPortForwardRequest {
+  string vm_id = 1;
+  uint32 host_port = 2;  // 0 = auto-allocate
+  uint32 vm_port = 3;
+  string protocol = 4;   // "tcp" or "udp"
+}
+
+message PortForwardInfo {
+  string vm_id = 1;
+  uint32 host_port = 2;
+  uint32 vm_port = 3;
+  string protocol = 4;
+}
+
+message RemovePortForwardRequest {
+  string vm_id = 1;
+  uint32 host_port = 2;
+  string protocol = 3;
+}
+
+message RemovePortForwardResponse {}
+
+message ListPortForwardsRequest {
+  string vm_id = 1; // empty = all VMs
+}
+
+message ListPortForwardsResponse {
+  repeated PortForwardInfo forwards = 1;
+}
+
+// ─── Health ─────────────────────────────────────────────────────────────────
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  uint32 vm_count = 2;
+}
