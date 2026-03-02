@@ -20,27 +20,39 @@ pub struct AttestedResponse {
     pub body: String,
 }
 
-/// Layer 2: Make an API call with TLS-bound attestation verification.
-///
-/// This function:
-/// 1. Creates a custom TLS verifier that extracts attestation from the server cert
-/// 2. Builds a rustls `ClientConfig` using the custom verifier
-/// 3. Makes a GET request to the given URL
-/// 4. Extracts the attestation report from the TLS handshake
-/// 5. Verifies the SEV-SNP report against the AMD certificate chain
-/// 6. Returns an `AttestedResponse` with both attestation and HTTP response info
-pub async fn attested_request(url: &str, product: &str) -> Result<AttestedResponse> {
-    let verifier = SnpCertVerifier::new();
-
+/// Build a reqwest client with our custom TLS verifier.
+fn build_attested_client(
+    verifier: &Arc<SnpCertVerifier>,
+) -> Result<reqwest::Client> {
     let tls_config = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier.clone())
         .with_no_client_auth();
 
-    let client = reqwest::Client::builder()
+    reqwest::Client::builder()
         .use_preconfigured_tls(tls_config)
         .build()
-        .context("failed to build HTTP client with custom TLS config")?;
+        .context("failed to build HTTP client with custom TLS config")
+}
+
+use std::sync::Arc;
+
+/// Layer 2: Make an API call with TLS-bound attestation verification.
+///
+/// During the TLS handshake, the verifier checks:
+/// - The server cert contains an attestation extension
+/// - The report_data is bound to the server's TLS public key (SHA-384 hash)
+/// - If `expected_measurement` is provided, the measurement matches
+///
+/// After the handshake, the full AMD certificate chain is verified
+/// (VCEK -> ASK -> ARK) and the report signature is checked.
+pub async fn attested_request(
+    url: &str,
+    product: &str,
+    expected_measurement: Option<&[u8]>,
+) -> Result<AttestedResponse> {
+    let verifier = SnpCertVerifier::new(expected_measurement.map(|m| m.to_vec()));
+    let client = build_attested_client(&verifier)?;
 
     let response = client
         .get(url)
@@ -73,14 +85,16 @@ pub async fn attested_request(url: &str, product: &str) -> Result<AttestedRespon
 
 /// Layer 3: Request a fresh attestation report with a random nonce.
 ///
-/// This function:
-/// 1. Generates a random 32-byte nonce
-/// 2. Sends a GET request to `{base_url}/.well-known/attestation?nonce={hex_nonce}`
-/// 3. Parses the JSON response as an `AttestationReport`
-/// 4. Verifies the nonce appears in the `report_data` field
-/// 5. Verifies the SEV-SNP report against the AMD certificate chain
-/// 6. Returns the verified `AttestationReport`
-pub async fn fresh_attestation(base_url: &str, product: &str) -> Result<AttestationReport> {
+/// This combines TLS-bound verification (Layer 2) with a fresh nonce challenge:
+/// 1. TLS handshake verifies key binding and optional measurement
+/// 2. Random nonce is sent to the attestation endpoint
+/// 3. Response proves the TEE can produce a fresh report containing our nonce
+/// 4. Full AMD certificate chain is verified
+pub async fn fresh_attestation(
+    base_url: &str,
+    product: &str,
+    expected_measurement: Option<&[u8]>,
+) -> Result<AttestationReport> {
     // Generate a random 32-byte nonce
     let mut nonce = [0u8; 32];
     rand::thread_rng().fill(&mut nonce);
@@ -95,18 +109,8 @@ pub async fn fresh_attestation(base_url: &str, product: &str) -> Result<Attestat
         ))
         .context("failed to construct attestation URL")?;
 
-    // Use attested_request to make the call with TLS-bound verification
-    let verifier = SnpCertVerifier::new();
-
-    let tls_config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(verifier.clone())
-        .with_no_client_auth();
-
-    let client = reqwest::Client::builder()
-        .use_preconfigured_tls(tls_config)
-        .build()
-        .context("failed to build HTTP client with custom TLS config")?;
+    let verifier = SnpCertVerifier::new(expected_measurement.map(|m| m.to_vec()));
+    let client = build_attested_client(&verifier)?;
 
     let response = client
         .get(attestation_url.as_str())
@@ -131,7 +135,7 @@ pub async fn fresh_attestation(base_url: &str, product: &str) -> Result<Attestat
         );
     }
 
-    // Verify the SEV-SNP report
+    // Verify the SEV-SNP report against the AMD certificate chain
     let result = verify_sev_snp_report(&report, product)
         .await
         .context("SEV-SNP report verification failed")?;

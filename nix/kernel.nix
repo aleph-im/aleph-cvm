@@ -9,6 +9,13 @@ pkgs.linuxPackages_6_6.kernel.override {
     CRYPTO_DEV_CCP_DD = lib.mkForce yes;
     CRYPTO_DEV_SP_PSP = lib.mkForce yes;
 
+    # Networking (built-in, since we boot from initrd without module loading)
+    PACKET = lib.mkForce yes;         # AF_PACKET sockets (required by udhcpc/DHCP)
+    UNIX = lib.mkForce yes;           # AF_UNIX sockets
+
+    # Filesystems (built-in for initrd boot)
+    EXT4_FS = lib.mkForce yes;        # ext4 rootfs support
+
     # Virtio (for disk and network)
     VIRTIO = lib.mkForce yes;
     VIRTIO_PCI = lib.mkForce yes;
@@ -16,7 +23,7 @@ pkgs.linuxPackages_6_6.kernel.override {
     VIRTIO_NET = lib.mkForce yes;
     VIRTIO_CONSOLE = lib.mkForce yes;
 
-    # Minimal: no modules, everything built-in
-    MODULES = lib.mkForce no;
+    # Note: MODULES left as default (yes) to avoid interactive config questions.
+    # For a minimal production kernel, use a fully custom .config instead.
   };
 }

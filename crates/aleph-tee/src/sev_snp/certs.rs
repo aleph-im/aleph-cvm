@@ -1,4 +1,8 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
+use openssl::x509::X509;
+use tracing::debug;
 
 /// A complete AMD SEV-SNP certificate chain containing the VCEK, ASK, and ARK
 /// certificates in DER format.
@@ -29,19 +33,71 @@ pub struct TcbParams {
 /// Base URL for AMD's Key Distribution Service.
 const KDS_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
 
+/// Return the cache directory for AMD KDS certificates.
+///
+/// Uses `$XDG_CACHE_HOME/aleph-tee/kds` if set,
+/// otherwise `$HOME/.cache/aleph-tee/kds`.
+fn cache_dir() -> Option<PathBuf> {
+    let base = std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".cache"))
+        })?;
+    Some(base.join("aleph-tee").join("kds"))
+}
+
+/// Read a cached certificate file, if it exists.
+fn read_cached(path: &std::path::Path) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(data) if !data.is_empty() => {
+            debug!(path = %path.display(), "using cached certificate");
+            Some(data)
+        }
+        _ => None,
+    }
+}
+
+/// Write certificate data to the cache.
+fn write_cache(path: &std::path::Path, data: &[u8]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(path, data) {
+        Ok(()) => debug!(path = %path.display(), "cached certificate"),
+        Err(e) => debug!(path = %path.display(), error = %e, "failed to cache certificate"),
+    }
+}
+
 /// Fetch the VCEK (Versioned Chip Endorsement Key) certificate from AMD KDS.
 ///
 /// The `product` parameter identifies the CPU product line (e.g., "Milan", "Genoa", "Turin").
 /// The `chip_id` is the 64-byte unique chip identifier from the attestation report.
 /// The `tcb` parameters specify the TCB version to request.
 ///
-/// Returns the VCEK certificate in DER format.
+/// Returns the VCEK certificate in DER format. Results are cached on disk
+/// to avoid hitting AMD's rate limiter on repeated requests.
 pub async fn fetch_vcek(
     product: &str,
     chip_id: &[u8; 64],
     tcb: &TcbParams,
 ) -> Result<Vec<u8>> {
     let chip_id_hex = hex::encode(chip_id);
+
+    // Check cache first
+    let cache_path = cache_dir().map(|d| {
+        d.join(product).join(format!(
+            "vcek_{chip_id_hex}_{}_{}_{}_{}.der",
+            tcb.bl_spl, tcb.tee_spl, tcb.snp_spl, tcb.ucode_spl
+        ))
+    });
+    if let Some(ref path) = cache_path {
+        if let Some(data) = read_cached(path) {
+            return Ok(data);
+        }
+    }
 
     let url = format!(
         "{KDS_BASE_URL}/{product}/{chip_id_hex}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
@@ -62,7 +118,11 @@ pub async fn fetch_vcek(
         .await
         .context("failed to read VCEK response body")?;
 
-    Ok(bytes.to_vec())
+    let data = bytes.to_vec();
+    if let Some(ref path) = cache_path {
+        write_cache(path, &data);
+    }
+    Ok(data)
 }
 
 /// Fetch the CA certificate chain (ASK + ARK) from AMD KDS.
@@ -71,10 +131,20 @@ pub async fn fetch_vcek(
 ///
 /// Returns a tuple of `(ask_der, ark_der)` -- the ASK and ARK certificates in DER format.
 ///
-/// AMD's KDS returns a PKCS#7 / certificate bundle at the `cert_chain` endpoint.
-/// The response contains two concatenated DER-encoded X.509 certificates:
-/// the VCEK-signing CA (ASK) followed by the root CA (ARK).
+/// AMD's KDS returns PEM-encoded certificates at the `cert_chain` endpoint.
+/// Results are cached on disk to avoid hitting AMD's rate limiter.
 pub async fn fetch_ca_chain(product: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    // Check cache first
+    let cache_paths = cache_dir().map(|d| {
+        let dir = d.join(product);
+        (dir.join("ask.der"), dir.join("ark.der"))
+    });
+    if let Some((ref ask_path, ref ark_path)) = cache_paths {
+        if let (Some(ask), Some(ark)) = (read_cached(ask_path), read_cached(ark_path)) {
+            return Ok((ask, ark));
+        }
+    }
+
     let url = format!("{KDS_BASE_URL}/{product}/cert_chain");
 
     let response = reqwest::get(&url)
@@ -91,10 +161,30 @@ pub async fn fetch_ca_chain(product: &str) -> Result<(Vec<u8>, Vec<u8>)> {
         .await
         .context("failed to read CA chain response body")?;
 
-    // The cert_chain endpoint returns two DER-encoded X.509 certificates
-    // concatenated together. We need to split them by parsing the DER length
-    // of the first certificate.
-    split_der_certs(&bytes).context("failed to split CA chain into ASK and ARK certificates")
+    // AMD KDS returns PEM-encoded certificates. Parse them and convert to DER.
+    let (ask_der, ark_der) = if bytes.starts_with(b"-----BEGIN") {
+        let certs = X509::stack_from_pem(&bytes)
+            .context("failed to parse PEM certificate chain from AMD KDS")?;
+        if certs.len() < 2 {
+            anyhow::bail!(
+                "expected 2 certificates (ASK + ARK) in CA chain, got {}",
+                certs.len()
+            );
+        }
+        let ask_der = certs[0].to_der().context("failed to convert ASK to DER")?;
+        let ark_der = certs[1].to_der().context("failed to convert ARK to DER")?;
+        (ask_der, ark_der)
+    } else {
+        // Fallback: try splitting as concatenated DER
+        split_der_certs(&bytes)
+            .context("failed to split CA chain into ASK and ARK certificates")?
+    };
+
+    if let Some((ref ask_path, ref ark_path)) = cache_paths {
+        write_cache(ask_path, &ask_der);
+        write_cache(ark_path, &ark_der);
+    }
+    Ok((ask_der, ark_der))
 }
 
 /// Split a buffer containing two concatenated DER-encoded certificates

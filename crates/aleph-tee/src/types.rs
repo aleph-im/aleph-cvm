@@ -29,12 +29,31 @@ pub struct VerificationResult {
     pub details: serde_json::Value,
 }
 
+/// Configuration for a disk attached to a VM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskConfig {
+    pub path: std::path::PathBuf,
+    #[serde(default = "default_true")]
+    pub readonly: bool,
+    #[serde(default = "default_raw")]
+    pub format: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_raw() -> String {
+    "raw".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
     pub vm_id: String,
     pub kernel: std::path::PathBuf,
     pub initrd: std::path::PathBuf,
-    pub rootfs: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub disks: Vec<DiskConfig>,
     pub vcpus: u32,
     pub memory_mb: u32,
     pub tee: TeeConfig,
@@ -141,7 +160,10 @@ mod tests {
             "vm_id": "test-vm-001",
             "kernel": "/boot/vmlinuz",
             "initrd": "/boot/initrd.img",
-            "rootfs": "/images/rootfs.ext4",
+            "disks": [
+                {"path": "/images/rootfs.ext4", "readonly": true, "format": "raw"},
+                {"path": "/data/volume.qcow2", "readonly": false, "format": "qcow2"}
+            ],
             "vcpus": 4,
             "memory_mb": 2048,
             "tee": {
@@ -154,10 +176,13 @@ mod tests {
         assert_eq!(config.vm_id, "test-vm-001");
         assert_eq!(config.kernel, std::path::PathBuf::from("/boot/vmlinuz"));
         assert_eq!(config.initrd, std::path::PathBuf::from("/boot/initrd.img"));
-        assert_eq!(
-            config.rootfs,
-            Some(std::path::PathBuf::from("/images/rootfs.ext4"))
-        );
+        assert_eq!(config.disks.len(), 2);
+        assert_eq!(config.disks[0].path, std::path::PathBuf::from("/images/rootfs.ext4"));
+        assert!(config.disks[0].readonly);
+        assert_eq!(config.disks[0].format, "raw");
+        assert_eq!(config.disks[1].path, std::path::PathBuf::from("/data/volume.qcow2"));
+        assert!(!config.disks[1].readonly);
+        assert_eq!(config.disks[1].format, "qcow2");
         assert_eq!(config.vcpus, 4);
         assert_eq!(config.memory_mb, 2048);
         assert_eq!(config.tee.backend, TeeType::SevSnp);
@@ -165,12 +190,11 @@ mod tests {
     }
 
     #[test]
-    fn test_vm_config_optional_fields() {
+    fn test_vm_config_no_disks() {
         let json = r#"{
             "vm_id": "test-vm-002",
             "kernel": "/boot/vmlinuz",
             "initrd": "/boot/initrd.img",
-            "rootfs": null,
             "vcpus": 2,
             "memory_mb": 1024,
             "tee": {
@@ -180,8 +204,16 @@ mod tests {
         }"#;
 
         let config: VmConfig = serde_json::from_str(json).unwrap();
-        assert!(config.rootfs.is_none());
+        assert!(config.disks.is_empty());
         assert_eq!(config.tee.backend, TeeType::Tdx);
         assert!(config.tee.policy.is_none());
+    }
+
+    #[test]
+    fn test_disk_config_defaults() {
+        let json = r#"{"path": "/images/rootfs.ext4"}"#;
+        let disk: DiskConfig = serde_json::from_str(json).unwrap();
+        assert!(disk.readonly); // default true
+        assert_eq!(disk.format, "raw"); // default raw
     }
 }

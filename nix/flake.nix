@@ -29,18 +29,64 @@
         CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
       };
 
+      # Musl cross-compiler for C dependencies (zstd-sys, aws-lc-sys, etc.).
+      muslCC = pkgs.pkgsCross.musl64.stdenv.cc;
+
+      # Workspace source with proto files included.
+      # Crane's default cleanCargoSource only keeps .rs/Cargo.toml/build.rs.
+      # We also need .proto files for tonic-build (aleph-compute-proto).
+      workspaceSrc = let
+        protoFilter = path: _type: builtins.match ".*\\.proto$" path != null;
+        combined = path: type:
+          (craneToolchain.filterCargoSources path type) || (protoFilter path type);
+      in pkgs.lib.cleanSourceWith {
+        src = ../.;
+        filter = combined;
+      };
+
       # Attestation agent (static musl binary).
       # Built from the workspace root, selecting just the agent crate.
+      # Needs static openssl for openssl-sys (sev crate dependency).
+      staticOpenssl = pkgs.pkgsStatic.openssl;
       attest-agent = craneToolchain.buildPackage {
-        src = ../.;
+        src = workspaceSrc;
         cargoExtraArgs = "-p aleph-attest-agent";
         CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
         CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+        nativeBuildInputs = [ pkgs.pkg-config muslCC pkgs.protobuf ];
+        buildInputs = [ staticOpenssl.dev ];
+        OPENSSL_DIR = "${staticOpenssl.dev}";
+        OPENSSL_LIB_DIR = "${staticOpenssl.out}/lib";
+        OPENSSL_STATIC = "1";
+        OPENSSL_NO_VENDOR = "1";
+        # Use musl-targeting C compiler for all C dependencies.
+        CC_x86_64_unknown_linux_musl = "${muslCC}/bin/x86_64-unknown-linux-musl-cc";
+        AR_x86_64_unknown_linux_musl = "${muslCC}/bin/x86_64-unknown-linux-musl-ar";
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${muslCC}/bin/x86_64-unknown-linux-musl-cc";
       };
+
+      # Fixed kernel command line — must match KERNEL_CMDLINE in aleph-compute-node.
+      kernelCmdline = "console=ttyS0 root=/dev/vda ro";
+
+      # OVMF firmware built with AmdSev variant (kernel hashing support).
+      ovmf = import ./ovmf.nix { inherit pkgs; };
+      ovmfFd = "${ovmf}/OVMF.fd";
+
+      # nixpkgs 24.11 ships sev-snp-measure 0.0.11 which has a measurement
+      # calculation bug.  Override to 0.0.12 which produces correct results.
+      sev-snp-measure = pkgs.python3Packages.sev-snp-measure.overridePythonAttrs (old: rec {
+        version = "0.0.12";
+        src = pkgs.fetchFromGitHub {
+          owner = "virtee";
+          repo = "sev-snp-measure";
+          rev = "v${version}";
+          hash = "sha256-UcXU6rNjcRN1T+iWUNrqeJCkSa02WU1/pBwLqHVPRyw=";
+        };
+      });
 
     in {
       packages.${system} = {
-        inherit fib-service attest-agent;
+        inherit fib-service attest-agent ovmf;
 
         kernel = pkgs.callPackage ./kernel.nix {};
         initrd = pkgs.callPackage ./initrd.nix {
@@ -51,15 +97,36 @@
           inherit fib-service;
         };
 
-        # Convenience: build all three artifacts.
-        vm-fib-demo = pkgs.symlinkJoin {
-          name = "vm-fib-demo";
-          paths = [
-            self.packages.${system}.kernel
-            self.packages.${system}.initrd
-            self.packages.${system}.rootfs
-          ];
-        };
+        # Pre-computed SEV-SNP launch measurement for the demo config (2 vCPUs).
+        # Computed at build time so no tools are needed on the deployment server.
+        # --vcpu-type must match the -cpu flag in QEMU args (EPYC-v4 = Genoa).
+        # The AmdSev OVMF includes kernel hashing metadata, so the measurement
+        # covers the full stack: firmware + kernel + initrd + cmdline.
+        measurement = pkgs.runCommand "sev-snp-measurement" {
+          nativeBuildInputs = [ sev-snp-measure ];
+        } ''
+          sev-snp-measure \
+            --mode snp \
+            --vcpus 2 \
+            --vcpu-type EPYC-v4 \
+            --ovmf ${ovmfFd} \
+            --kernel ${self.packages.${system}.kernel}/bzImage \
+            --initrd ${self.packages.${system}.initrd}/initrd \
+            --append "${kernelCmdline}" \
+            | tr -d '\n' > $out
+        '';
+
+        # Convenience: build all artifacts into one directory.
+        # Includes OVMF firmware and pre-computed measurement — no tools
+        # needed on the deployment server.
+        vm-fib-demo = pkgs.runCommand "vm-fib-demo" {} ''
+          mkdir -p $out
+          ln -s ${self.packages.${system}.kernel}/bzImage $out/bzImage
+          ln -s ${self.packages.${system}.initrd}/initrd $out/initrd
+          ln -s ${self.packages.${system}.rootfs} $out/rootfs.ext4
+          cp ${ovmfFd} $out/OVMF.fd
+          cp ${self.packages.${system}.measurement} $out/measurement.hex
+        '';
       };
     };
 }
