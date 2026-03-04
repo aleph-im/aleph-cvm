@@ -16,6 +16,11 @@ pkgs.linuxPackages_6_6.kernel.override {
     # Filesystems (built-in for initrd boot)
     EXT4_FS = lib.mkForce yes;        # ext4 rootfs support
 
+    # Device-mapper + dm-verity (built-in for rootfs integrity verification)
+    BLK_DEV_DM = lib.mkForce yes;
+    DM_VERITY = lib.mkForce yes;
+    CRYPTO_SHA256 = lib.mkForce yes;
+
     # Virtio (for disk and network)
     VIRTIO = lib.mkForce yes;
     VIRTIO_PCI = lib.mkForce yes;
