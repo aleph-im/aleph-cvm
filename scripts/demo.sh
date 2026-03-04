@@ -8,8 +8,9 @@
 #
 # Usage: sudo ./scripts/demo.sh <artifacts-dir> [--amd-product Genoa] [--keep-bridge] [--ipv6-pool 2001:db8::/48]
 #
-# Artifacts dir must contain: bzImage, initrd, rootfs.ext4, OVMF.fd, measurement.hex, aleph-compute-node, aleph-cvm
-# Requires: curl (for VM guest HTTPS endpoints)
+# Artifacts dir must contain: bzImage, initrd, rootfs.ext4, OVMF.fd, measurement.hex,
+#   rootfs.ext4.verity, rootfs.ext4.roothash, aleph-compute-node, aleph-cvm
+# Requires: curl, veritysetup (for dm-verity rootfs integrity)
 
 set -euo pipefail
 
@@ -162,7 +163,7 @@ fi
 ok "SEV-SNP enabled"
 
 # Required binaries
-for bin in qemu-system-x86_64 dnsmasq curl ip; do
+for bin in qemu-system-x86_64 dnsmasq curl ip veritysetup; do
     if ! command -v "$bin" &>/dev/null; then
         fail "Required binary not found: $bin"
         exit 1
@@ -170,8 +171,8 @@ for bin in qemu-system-x86_64 dnsmasq curl ip; do
 done
 ok "Required binaries found"
 
-# Artifacts (including OVMF firmware and pre-computed measurement)
-for artifact in bzImage initrd rootfs.ext4 OVMF.fd measurement.hex aleph-compute-node aleph-cvm; do
+# Artifacts (including OVMF firmware, pre-computed measurement, and verity)
+for artifact in bzImage initrd rootfs.ext4 OVMF.fd measurement.hex rootfs.ext4.verity rootfs.ext4.roothash aleph-compute-node aleph-cvm; do
     if [[ ! -f "${ARTIFACTS_DIR}/${artifact}" ]]; then
         fail "Artifact not found: ${ARTIFACTS_DIR}/${artifact}"
         exit 1
