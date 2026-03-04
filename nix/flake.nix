@@ -65,9 +65,6 @@
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${muslCC}/bin/x86_64-unknown-linux-musl-cc";
       };
 
-      # Fixed kernel command line — must match KERNEL_CMDLINE in aleph-compute-node.
-      kernelCmdline = "console=ttyS0 root=/dev/vda ro";
-
       # OVMF firmware built with AmdSev variant (kernel hashing support).
       ovmf = import ./ovmf.nix { inherit pkgs; };
       ovmfFd = "${ovmf}/OVMF.fd";
@@ -97,12 +94,29 @@
           inherit fib-service;
         };
 
+        # Compute dm-verity hash tree and root hash for the demo rootfs.
+        # The root hash is embedded in the kernel cmdline, binding rootfs
+        # integrity to the SEV-SNP measurement.
+        verity = pkgs.runCommand "rootfs-verity" {
+          nativeBuildInputs = [ pkgs.cryptsetup ];
+        } ''
+          mkdir -p $out
+          veritysetup format \
+            ${self.packages.${system}.rootfs} \
+            $out/hashtree \
+            | tee /dev/stderr \
+            | grep "Root hash:" \
+            | awk '{print $NF}' \
+            | tr -d '\n' > $out/roothash
+        '';
+
         # Pre-computed SEV-SNP launch measurement for the demo config (2 vCPUs).
-        # Computed at build time so no tools are needed on the deployment server.
-        # --vcpu-type must match the -cpu flag in QEMU args (EPYC-v4 = Genoa).
-        # The AmdSev OVMF includes kernel hashing metadata, so the measurement
-        # covers the full stack: firmware + kernel + initrd + cmdline.
-        measurement = pkgs.runCommand "sev-snp-measurement" {
+        # The kernel cmdline now includes the dm-verity root hash, so the
+        # measurement covers the full stack: firmware + kernel + initrd +
+        # cmdline (with roothash) → transitively covers rootfs integrity.
+        measurement = let
+          kernelCmdline = "console=ttyS0 root=/dev/mapper/verity-root ro roothash=${builtins.readFile "${self.packages.${system}.verity}/roothash"}";
+        in pkgs.runCommand "sev-snp-measurement" {
           nativeBuildInputs = [ sev-snp-measure ];
         } ''
           sev-snp-measure \
@@ -117,8 +131,7 @@
         '';
 
         # Convenience: build all artifacts into one directory.
-        # Includes OVMF firmware and pre-computed measurement — no tools
-        # needed on the deployment server.
+        # Includes OVMF firmware, pre-computed measurement, and verity artifacts.
         vm-fib-demo = pkgs.runCommand "vm-fib-demo" {} ''
           mkdir -p $out
           ln -s ${self.packages.${system}.kernel}/bzImage $out/bzImage
@@ -126,6 +139,8 @@
           ln -s ${self.packages.${system}.rootfs} $out/rootfs.ext4
           cp ${ovmfFd} $out/OVMF.fd
           cp ${self.packages.${system}.measurement} $out/measurement.hex
+          cp ${self.packages.${system}.verity}/hashtree $out/rootfs.verity
+          cp ${self.packages.${system}.verity}/roothash $out/rootfs.roothash
         '';
       };
     };
