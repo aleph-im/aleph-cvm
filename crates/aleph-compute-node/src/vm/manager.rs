@@ -21,6 +21,7 @@ use aleph_tee::types::VmConfig;
 use crate::network;
 use crate::persistence::{self, PersistedVm};
 use crate::qemu::args::{build_qemu_command, QemuPaths};
+use crate::verity;
 use crate::qemu::process::QemuProcess;
 use crate::vm::lifecycle::VmState;
 
@@ -139,7 +140,7 @@ impl VmManager {
     /// If `None` and an IPv6 pool is configured, a random /128 is allocated.
     pub async fn create_vm(
         &self,
-        config: VmConfig,
+        mut config: VmConfig,
         requested_ipv6: Option<Ipv6Net>,
     ) -> Result<VmInfo> {
         let vm_id = config.vm_id.clone();
@@ -220,6 +221,27 @@ impl VmManager {
             ndp.add_range(&tap_name, *ipv6).await;
         }
 
+        // Compute dm-verity for the rootfs (first disk)
+        let kernel_cmdline = if let Some(rootfs_disk) = config.disks.first() {
+            match verity::ensure_verity(&rootfs_disk.path) {
+                Ok(vinfo) => {
+                    // Insert hash tree as second disk (right after rootfs)
+                    config.disks.insert(1, aleph_tee::types::DiskConfig {
+                        path: vinfo.hashtree_path,
+                        readonly: true,
+                        format: "raw".to_string(),
+                    });
+                    verity::build_kernel_cmdline(Some(&vinfo.root_hash))
+                }
+                Err(e) => {
+                    warn!(vm_id = %vm_id, error = %e, "dm-verity setup failed, falling back to direct mount");
+                    verity::build_kernel_cmdline(None)
+                }
+            }
+        } else {
+            verity::build_kernel_cmdline(None)
+        };
+
         // Build QEMU command
         let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
         let mut args = vec!["qemu-system-x86_64".to_string()];
@@ -229,6 +251,7 @@ impl VmManager {
             &tap_name,
             self.tee_backend.as_ref(),
             &mac_addr,
+            &kernel_cmdline,
         ));
 
         // Spawn QEMU
