@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long, default_value = "/run/aleph-cvm")]
     run_dir: PathBuf,
 
+    /// Directory for persistent VM state files.
+    #[arg(long, default_value = "/var/lib/aleph-cvm/vms")]
+    state_dir: PathBuf,
+
     /// AMD product name for SEV-SNP (e.g. Milan, Genoa, Turin).
     #[arg(long, default_value = "Genoa")]
     amd_product: String,
@@ -97,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         bridge = %cli.bridge,
         gateway = %cli.gateway_ip,
         run_dir = %cli.run_dir.display(),
+        state_dir = %cli.state_dir.display(),
         amd_product = %cli.amd_product,
         dhcp_hostsdir = ?cli.dhcp_hostsdir,
         ovmf_path = ?cli.ovmf_path,
@@ -130,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
     // Create the VM manager
     let manager = Arc::new(VmManager::new(
         cli.run_dir.clone(),
+        cli.state_dir.clone(),
         cli.bridge,
         cli.gateway_ip,
         tee_backend,
@@ -142,11 +148,18 @@ async fn main() -> anyhow::Result<()> {
     // Initialize nftables supervisor chains
     manager.setup_nftables().expect("failed to initialize nftables");
 
+    // Recover VMs from previous run
+    if let Err(e) = manager.recover_vms().await {
+        tracing::error!(error = %e, "failed to recover VMs from persisted state");
+    }
+
     // Run gRPC server with graceful shutdown on SIGINT/SIGTERM
     let grpc_server = ComputeNodeServer::new(manager);
 
     info!(socket = %cli.grpc_socket.display(), "gRPC server starting");
     grpc_server.serve(&cli.grpc_socket).await?;
+
+    info!("orchestrator shut down -- VMs continue running under systemd");
 
     Ok(())
 }
