@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use ipnet::Ipv6Net;
@@ -33,7 +33,9 @@ struct VmHandle {
     process: Option<QemuProcess>,
     tap_name: String,
     mac_addr: String,
-    created_at: Instant,
+    /// Wall-clock creation time (seconds since UNIX epoch).
+    /// Used for uptime calculation that survives orchestrator restarts.
+    created_at_epoch: u64,
 }
 
 /// JSON-serializable VM information returned by the API.
@@ -55,7 +57,11 @@ impl VmInfo {
             ip: handle.ip.to_string(),
             ipv6: handle.ipv6.map(|n| n.to_string()).unwrap_or_default(),
             tee: format!("{:?}", handle.config.tee.backend),
-            uptime_secs: handle.created_at.elapsed().as_secs(),
+            uptime_secs: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(handle.created_at_epoch),
         }
     }
 }
@@ -243,6 +249,10 @@ impl VmManager {
         };
 
         // Persist VM state to disk
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let persisted = PersistedVm {
             config: config.clone(),
             ip: vm_ip,
@@ -250,10 +260,7 @@ impl VmManager {
             tap_name: tap_name.clone(),
             mac_addr: mac_addr.clone(),
             port_forwards: vec![],
-            created_at_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            created_at_epoch: now_epoch,
         };
         if let Err(e) = persistence::save_vm(&self.state_dir, &vm_id, &persisted) {
             warn!(vm_id = %vm_id, error = %e, "failed to persist VM state (VM is running but not recoverable)");
@@ -268,7 +275,7 @@ impl VmManager {
             process: Some(process),
             tap_name,
             mac_addr: mac_addr.clone(),
-            created_at: Instant::now(),
+            created_at_epoch: now_epoch,
         };
 
         let info = VmInfo::from_handle(&handle);
@@ -532,7 +539,7 @@ impl VmManager {
                 process,
                 tap_name: pvm.tap_name,
                 mac_addr: pvm.mac_addr,
-                created_at: Instant::now(),
+                created_at_epoch: pvm.created_at_epoch,
             };
 
             info!(
