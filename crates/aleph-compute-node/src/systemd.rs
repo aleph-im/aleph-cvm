@@ -28,6 +28,8 @@ pub fn start_vm_unit(vm_id: &str, qemu_args: &[String]) -> Result<()> {
         "--property", "KillMode=mixed",
         "--property", "TimeoutStopSec=30",
         "--property", &format!("SyslogIdentifier={unit}"),
+        "--property", "StandardOutput=journal",
+        "--property", "StandardError=journal",
         "--",
         program,
     ]);

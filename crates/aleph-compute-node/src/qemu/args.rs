@@ -17,9 +17,6 @@ pub const KERNEL_CMDLINE: &str = "console=ttyS0 root=/dev/vda ro";
 #[derive(Debug, Clone)]
 pub struct QemuPaths {
     pub qmp_socket: PathBuf,
-    pub serial_log: PathBuf,
-    #[allow(dead_code)]
-    pub pidfile: PathBuf,
 }
 
 impl QemuPaths {
@@ -28,8 +25,6 @@ impl QemuPaths {
         let vm_dir = run_dir.join(vm_id);
         Self {
             qmp_socket: vm_dir.join("qmp.sock"),
-            serial_log: vm_dir.join("serial.log"),
-            pidfile: vm_dir.join("qemu.pid"),
         }
     }
 }
@@ -73,11 +68,8 @@ pub fn build_qemu_command(
         KERNEL_CMDLINE.into(),
     ]);
 
-    // Serial output
-    args.extend([
-        "-serial".into(),
-        format!("file:{}", paths.serial_log.display()),
-    ]);
+    // Serial output to stdout (captured by journald when running under systemd)
+    args.extend(["-serial".into(), "stdio".into()]);
 
     // QMP socket
     args.extend([
@@ -256,7 +248,5 @@ mod tests {
     fn test_qemu_paths() {
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "my-vm");
         assert_eq!(paths.qmp_socket, PathBuf::from("/run/aleph-cvm/my-vm/qmp.sock"));
-        assert_eq!(paths.serial_log, PathBuf::from("/run/aleph-cvm/my-vm/serial.log"));
-        assert_eq!(paths.pidfile, PathBuf::from("/run/aleph-cvm/my-vm/qemu.pid"));
     }
 }
