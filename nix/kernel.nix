@@ -16,11 +16,10 @@ pkgs.linuxPackages_6_6.kernel.override {
     # Filesystems (built-in for initrd boot)
     EXT4_FS = lib.mkForce yes;        # ext4 rootfs support
 
-    # dm-verity (built-in for rootfs integrity verification).
-    # DM_VERITY=y auto-promotes BLK_DEV_DM from m to y.
-    # Don't force BLK_DEV_DM directly — that triggers interactive prompts
-    # for all DM sub-options (DM_CRYPT, DM_SNAPSHOT, etc.).
-    DM_VERITY = lib.mkForce yes;
+    # dm-verity: BLK_DEV_DM and DM_VERITY default to =m in the base config.
+    # We load them as modules from the initrd rather than forcing =y, because
+    # the kconfig dependency chain (DM_VERITY → BLK_DEV_DM → DAX) conflicts
+    # with nixpkgs' generate-config.pl interactive config generator.
 
     # Virtio (for disk and network)
     VIRTIO = lib.mkForce yes;

@@ -13,5 +13,5 @@ pkgs.runCommand "rootfs.ext4" {
 
   # Create ext4 image.
   truncate -s ''${size}M $out
-  mkfs.ext4 -d rootfs $out
+  mkfs.ext4 -b 4096 -d rootfs $out
 ''
