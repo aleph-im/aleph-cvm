@@ -139,8 +139,8 @@
           ln -s ${self.packages.${system}.rootfs} $out/rootfs.ext4
           cp ${ovmfFd} $out/OVMF.fd
           cp ${self.packages.${system}.measurement} $out/measurement.hex
-          cp ${self.packages.${system}.verity}/hashtree $out/rootfs.verity
-          cp ${self.packages.${system}.verity}/roothash $out/rootfs.roothash
+          cp ${self.packages.${system}.verity}/hashtree $out/rootfs.ext4.verity
+          cp ${self.packages.${system}.verity}/roothash $out/rootfs.ext4.roothash
         '';
       };
     };
