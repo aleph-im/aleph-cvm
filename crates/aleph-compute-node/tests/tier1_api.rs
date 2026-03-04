@@ -55,6 +55,7 @@ fn mock_manager() -> Arc<VmManager> {
     let backend: Arc<dyn TeeBackend> = Arc::new(MockTeeBackend);
     Arc::new(VmManager::new(
         PathBuf::from("/tmp/aleph-cvm-test"),
+        PathBuf::from("/tmp/aleph-cvm-test/state"),
         "br-test".to_string(),
         Ipv4Addr::new(10, 0, 200, 1),
         backend,

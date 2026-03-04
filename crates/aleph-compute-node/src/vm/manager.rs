@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use ipnet::Ipv6Net;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use aleph_network::ipv4::port_forward::PortForwardState;
 use aleph_network::ipv6::Ipv6RangeAllocator;
@@ -19,6 +19,7 @@ use aleph_tee::traits::TeeBackend;
 use aleph_tee::types::VmConfig;
 
 use crate::network;
+use crate::persistence::{self, PersistedVm};
 use crate::qemu::args::{build_qemu_command, QemuPaths};
 use crate::qemu::process::QemuProcess;
 use crate::vm::lifecycle::VmState;
@@ -31,6 +32,7 @@ struct VmHandle {
     ipv6: Option<Ipv6Net>,
     process: Option<QemuProcess>,
     tap_name: String,
+    mac_addr: String,
     created_at: Instant,
 }
 
@@ -62,6 +64,7 @@ impl VmInfo {
 pub struct VmManager {
     vms: RwLock<HashMap<String, VmHandle>>,
     run_dir: PathBuf,
+    state_dir: PathBuf,
     bridge: String,
     gateway_ip: Ipv4Addr,
     next_ip_offset: RwLock<u8>,
@@ -83,6 +86,7 @@ impl VmManager {
     /// and NDP proxy + ip6 nftables chains are enabled.
     pub fn new(
         run_dir: PathBuf,
+        state_dir: PathBuf,
         bridge: String,
         gateway_ip: Ipv4Addr,
         tee_backend: Arc<dyn TeeBackend>,
@@ -105,6 +109,7 @@ impl VmManager {
         Self {
             vms: RwLock::new(HashMap::new()),
             run_dir,
+            state_dir,
             bridge,
             gateway_ip,
             next_ip_offset: RwLock::new(1),
@@ -237,6 +242,23 @@ impl VmManager {
             }
         };
 
+        // Persist VM state to disk
+        let persisted = PersistedVm {
+            config: config.clone(),
+            ip: vm_ip,
+            ipv6: vm_ipv6,
+            tap_name: tap_name.clone(),
+            mac_addr: mac_addr.clone(),
+            port_forwards: vec![],
+            created_at_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        if let Err(e) = persistence::save_vm(&self.state_dir, &vm_id, &persisted) {
+            warn!(vm_id = %vm_id, error = %e, "failed to persist VM state (VM is running but not recoverable)");
+        }
+
         // Mark as Running immediately (no health check polling yet)
         let handle = VmHandle {
             config,
@@ -245,6 +267,7 @@ impl VmManager {
             ipv6: vm_ipv6,
             process: Some(process),
             tap_name,
+            mac_addr: mac_addr.clone(),
             created_at: Instant::now(),
         };
 
@@ -334,6 +357,11 @@ impl VmManager {
             }
         }
 
+        // Delete persisted state
+        if let Err(e) = persistence::delete_vm(&self.state_dir, id) {
+            warn!(vm_id = %id, error = %e, "failed to delete VM state file");
+        }
+
         info!(vm_id = %id, "VM deleted");
         Ok(())
     }
@@ -399,6 +427,8 @@ impl VmManager {
             pf.add(forward.clone());
         }
 
+        self.update_persisted_port_forwards(vm_id).await;
+
         Ok(forward)
     }
 
@@ -417,6 +447,8 @@ impl VmManager {
         self.nftables
             .remove_port_forward(host_port, forward.vm_port, protocol)?;
 
+        self.update_persisted_port_forwards(&forward.vm_id).await;
+
         Ok(())
     }
 
@@ -427,5 +459,94 @@ impl VmManager {
             Some(id) => pf.list_for_vm(id).into_iter().cloned().collect(),
             None => pf.list_all().into_iter().cloned().collect(),
         }
+    }
+
+    /// Re-persist port forwards for a VM after changes.
+    async fn update_persisted_port_forwards(&self, vm_id: &str) {
+        let path = self.state_dir.join(format!("{vm_id}.json"));
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(mut persisted) = serde_json::from_str::<PersistedVm>(&json) {
+                let pf = self.port_forwards.lock().await;
+                persisted.port_forwards = pf.list_for_vm(vm_id).into_iter().cloned().collect();
+                drop(pf);
+                let _ = persistence::save_vm(&self.state_dir, vm_id, &persisted);
+            }
+        }
+    }
+
+    /// Recover VMs from persisted state on startup.
+    ///
+    /// For each saved VM:
+    /// - If systemd unit is active -> reconnect (state = Running)
+    /// - If systemd unit is not active -> load as Stopped (scheduler decides)
+    pub async fn recover_vms(&self) -> Result<()> {
+        let persisted_vms = persistence::load_all_vms(&self.state_dir)?;
+        if persisted_vms.is_empty() {
+            return Ok(());
+        }
+
+        info!(count = persisted_vms.len(), "recovering VMs from persisted state");
+
+        let mut vms = self.vms.write().await;
+        let mut max_offset: u8 = 0;
+
+        for pvm in persisted_vms {
+            let vm_id = pvm.config.vm_id.clone();
+            let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
+
+            // Track highest IP offset to avoid collisions for new VMs
+            let last_octet = pvm.ip.octets()[3];
+            let gateway_last = self.gateway_ip.octets()[3];
+            let offset = last_octet.wrapping_sub(gateway_last);
+            if offset > max_offset {
+                max_offset = offset;
+            }
+
+            // Try to reconnect to running systemd unit
+            let (process, state) = match QemuProcess::reconnect(paths, vm_id.clone()) {
+                Ok(p) => (Some(p), VmState::Running),
+                Err(_) => (None, VmState::Stopped),
+            };
+
+            // Re-register IPv6 allocation if applicable
+            if let Some(ref ipv6) = pvm.ipv6 {
+                if let Some(ref alloc) = self.ipv6_allocator {
+                    let mut alloc = alloc.lock().await;
+                    let _ = alloc.allocate(&vm_id, Some(*ipv6));
+                }
+            }
+
+            // Restore port forwards into in-memory state
+            {
+                let mut pf = self.port_forwards.lock().await;
+                for fwd in &pvm.port_forwards {
+                    pf.add(fwd.clone());
+                }
+            }
+
+            let handle = VmHandle {
+                config: pvm.config,
+                state,
+                ip: pvm.ip,
+                ipv6: pvm.ipv6,
+                process,
+                tap_name: pvm.tap_name,
+                mac_addr: pvm.mac_addr,
+                created_at: Instant::now(),
+            };
+
+            info!(
+                vm_id = %vm_id,
+                state = %handle.state,
+                ip = %handle.ip,
+                "recovered VM"
+            );
+            vms.insert(vm_id, handle);
+        }
+
+        // Update next_ip_offset to avoid collisions
+        *self.next_ip_offset.write().await = max_offset.wrapping_add(1);
+
+        Ok(())
     }
 }
