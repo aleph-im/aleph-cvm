@@ -41,7 +41,10 @@ else
     fi
 fi
 
-# Wait for block device to appear, then find it.
+# Parse dm-verity root hash from kernel command line (if present).
+roothash=$(/bin/busybox sed -n 's/.*roothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
+
+# Wait for block device to appear.
 blkdev=""
 n=0
 while [ "$n" -lt 30 ]; do
@@ -57,12 +60,39 @@ done
 
 # Mount rootfs and start user application.
 if [ -n "$blkdev" ]; then
-    echo "init: mounting ${blkdev}"
-    /bin/busybox ls -la /dev/vda /dev/sda 2>&1
     /bin/busybox mkdir -p /mnt/root
-    if ! /bin/busybox mount -o ro "$blkdev" /mnt/root; then
-        echo "init: mount failed, trying without readonly"
-        /bin/busybox mount "$blkdev" /mnt/root || echo "init: mount failed completely"
+
+    if [ -n "$roothash" ]; then
+        # dm-verity: wait for hash tree device (/dev/vdb)
+        hashdev=""
+        n=0
+        while [ "$n" -lt 30 ]; do
+            if [ -b /dev/vdb ]; then
+                hashdev="/dev/vdb"
+                break
+            fi
+            /bin/busybox sleep 0.1
+            n=$((n + 1))
+        done
+
+        if [ -z "$hashdev" ]; then
+            echo "init: FATAL: roothash set but /dev/vdb (hash tree) not found"
+        else
+            echo "init: setting up dm-verity on ${blkdev} with hash tree ${hashdev}"
+            if /bin/veritysetup open "$blkdev" verity-root "$hashdev" --root-hash="$roothash"; then
+                echo "init: mounting /dev/mapper/verity-root"
+                /bin/busybox mount -o ro /dev/mapper/verity-root /mnt/root || echo "init: verity mount failed"
+            else
+                echo "init: FATAL: dm-verity verification failed — rootfs may be tampered"
+            fi
+        fi
+    else
+        # No dm-verity: direct mount (backwards compatible)
+        echo "init: mounting ${blkdev} (no dm-verity)"
+        if ! /bin/busybox mount -o ro "$blkdev" /mnt/root; then
+            echo "init: mount failed, trying without readonly"
+            /bin/busybox mount "$blkdev" /mnt/root || echo "init: mount failed completely"
+        fi
     fi
 
     if [ -x /mnt/root/bin/fib-service ]; then
