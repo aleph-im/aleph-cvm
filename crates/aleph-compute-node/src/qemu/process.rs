@@ -1,25 +1,24 @@
-use std::process::{Child, Command};
-use std::time::{Duration, Instant};
-
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 use super::args::QemuPaths;
+use crate::systemd;
 
-/// A running QEMU process with associated runtime paths.
+/// A QEMU process managed by systemd.
+///
+/// Instead of holding a `Child` process directly, this delegates to a
+/// systemd transient unit. The QEMU process survives orchestrator restarts.
 pub struct QemuProcess {
-    child: Child,
-    #[allow(dead_code)]
     pub paths: QemuPaths,
     pub vm_id: String,
 }
 
 impl QemuProcess {
-    /// Spawn a QEMU process with the given command-line arguments.
+    /// Start a QEMU process as a systemd transient unit.
     ///
-    /// Creates the VM runtime directory before launching the process.
+    /// Creates the VM runtime directory, then delegates to `systemd-run`.
     pub fn spawn(args: &[String], paths: QemuPaths, vm_id: String) -> Result<Self> {
-        // Create the runtime directory for this VM
+        // Create the runtime directory for QMP socket, serial log, etc.
         let vm_dir = paths
             .qmp_socket
             .parent()
@@ -27,72 +26,43 @@ impl QemuProcess {
         std::fs::create_dir_all(vm_dir)
             .with_context(|| format!("failed to create VM runtime dir: {}", vm_dir.display()))?;
 
-        let (program, cmd_args) = args
-            .split_first()
-            .context("empty argument list")?;
+        // Clean up any leftover failed unit from a previous run
+        systemd::reset_failed_unit(&vm_id);
 
-        info!(vm_id = %vm_id, program = %program, args = ?cmd_args, "spawning QEMU");
+        systemd::start_vm_unit(&vm_id, args)?;
 
-        let child = Command::new(program)
-            .args(cmd_args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .with_context(|| format!("failed to spawn QEMU: {program}"))?;
+        info!(vm_id = %vm_id, "QEMU started via systemd");
 
-        Ok(Self {
-            child,
-            paths,
-            vm_id,
-        })
+        Ok(Self { paths, vm_id })
     }
 
-    /// Wait for the QEMU process to exit, killing it after `timeout`.
-    pub fn wait_or_kill(&mut self, timeout: Duration) -> Result<()> {
-        let deadline = Instant::now() + timeout;
-
-        loop {
-            match self.child.try_wait()? {
-                Some(status) => {
-                    if let Some(stderr) = self.child.stderr.take() {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        let mut reader = stderr;
-                        let _ = reader.read_to_string(&mut buf);
-                        if !buf.is_empty() {
-                            warn!(vm_id = %self.vm_id, stderr = %buf.trim(), "QEMU stderr");
-                        }
-                    }
-                    info!(vm_id = %self.vm_id, ?status, "QEMU process exited");
-                    return Ok(());
-                }
-                None => {
-                    if Instant::now() >= deadline {
-                        warn!(vm_id = %self.vm_id, "QEMU did not exit in time, sending SIGKILL");
-                        self.child.kill().context("failed to kill QEMU")?;
-                        self.child.wait().context("failed to wait after kill")?;
-                        return Ok(());
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
+    /// Reconnect to an existing systemd-managed QEMU process.
+    ///
+    /// Used during recovery: the unit is already running, we just need
+    /// to recreate the in-memory handle.
+    pub fn reconnect(paths: QemuPaths, vm_id: String) -> Result<Self> {
+        if !systemd::is_unit_active(&vm_id) {
+            anyhow::bail!("systemd unit for VM {vm_id} is not active");
         }
+        info!(vm_id = %vm_id, "reconnected to running QEMU systemd unit");
+        Ok(Self { paths, vm_id })
     }
 
-    /// Return the PID of the QEMU process, if still running.
-    #[allow(dead_code)]
-    pub fn pid(&self) -> Option<u32> {
-        Some(self.child.id())
+    /// Check if the underlying systemd unit is still active.
+    pub fn is_running(&self) -> bool {
+        systemd::is_unit_active(&self.vm_id)
+    }
+
+    /// Stop the QEMU process via systemd.
+    pub fn stop(&self) -> Result<()> {
+        systemd::stop_vm_unit(&self.vm_id)
     }
 }
 
 impl Drop for QemuProcess {
     fn drop(&mut self) {
-        // Best-effort cleanup: try to kill the process if still running
-        if let Ok(None) = self.child.try_wait() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+        // Do NOT stop the unit on drop — the whole point is that
+        // QEMU survives orchestrator restarts. Only explicit
+        // delete_vm() calls should stop the unit.
     }
 }
