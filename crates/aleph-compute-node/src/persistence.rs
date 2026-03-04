@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::Path;
 
@@ -28,10 +29,15 @@ pub fn save_vm(state_dir: &Path, vm_id: &str, vm: &PersistedVm) -> Result<()> {
         .with_context(|| format!("failed to create state dir: {}", state_dir.display()))?;
     let path = state_dir.join(format!("{vm_id}.json"));
     let json = serde_json::to_string_pretty(vm)?;
-    // Atomic write: write to temp file then rename
+    // Atomic write: write to temp file, fsync, then rename
     let tmp = state_dir.join(format!("{vm_id}.json.tmp"));
-    std::fs::write(&tmp, &json)
+    let mut file = std::fs::File::create(&tmp)
+        .with_context(|| format!("failed to create {}", tmp.display()))?;
+    file.write_all(json.as_bytes())
         .with_context(|| format!("failed to write {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", tmp.display()))?;
+    drop(file);
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("failed to rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
