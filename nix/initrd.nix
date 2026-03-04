@@ -1,8 +1,21 @@
-{ pkgs, attest-agent, init-script, ... }:
+{ pkgs, attest-agent, kernel, init-script, ... }:
 
 let
   # veritysetup needs to be statically linked for the initrd environment.
   staticCryptsetup = pkgs.pkgsStatic.cryptsetup;
+
+  # dm-verity kernel modules (default =m in the kernel config).
+  # Load order: dax → dm-mod → dm-bufio → dm-verity.
+  modDir = "${kernel}/lib/modules/${kernel.modDirVersion}/kernel";
+  dmModules = pkgs.runCommand "dm-verity-modules" {
+    nativeBuildInputs = [ pkgs.xz ];
+  } ''
+    mkdir -p $out
+    xz -d -k -c ${modDir}/drivers/dax/dax.ko.xz > $out/dax.ko
+    xz -d -k -c ${modDir}/drivers/md/dm-mod.ko.xz > $out/dm-mod.ko
+    xz -d -k -c ${modDir}/drivers/md/dm-bufio.ko.xz > $out/dm-bufio.ko
+    xz -d -k -c ${modDir}/drivers/md/dm-verity.ko.xz > $out/dm-verity.ko
+  '';
 in
 pkgs.makeInitrd {
   contents = [
@@ -10,5 +23,10 @@ pkgs.makeInitrd {
     { object = init-script; symlink = "/init"; }
     { object = "${attest-agent}/bin/aleph-attest-agent"; symlink = "/bin/aleph-attest-agent"; }
     { object = "${staticCryptsetup}/bin/veritysetup"; symlink = "/bin/veritysetup"; }
+    # dm-verity kernel modules (loaded by init.sh before veritysetup).
+    { object = "${dmModules}/dax.ko"; symlink = "/lib/modules/dax.ko"; }
+    { object = "${dmModules}/dm-mod.ko"; symlink = "/lib/modules/dm-mod.ko"; }
+    { object = "${dmModules}/dm-bufio.ko"; symlink = "/lib/modules/dm-bufio.ko"; }
+    { object = "${dmModules}/dm-verity.ko"; symlink = "/lib/modules/dm-verity.ko"; }
   ];
 }

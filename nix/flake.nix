@@ -88,6 +88,7 @@
         kernel = pkgs.callPackage ./kernel.nix {};
         initrd = pkgs.callPackage ./initrd.nix {
           inherit attest-agent;
+          kernel = self.packages.${system}.kernel;
           init-script = ./init.sh;
         };
         rootfs = pkgs.callPackage ./rootfs.nix {
