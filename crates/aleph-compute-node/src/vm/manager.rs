@@ -286,13 +286,13 @@ impl VmManager {
     /// Delete a VM, stopping it if running.
     pub async fn delete_vm(&self, id: &str) -> Result<()> {
         let mut vms = self.vms.write().await;
-        let mut handle = vms
+        let handle = vms
             .remove(id)
             .with_context(|| format!("VM {id} not found"))?;
 
-        // Kill the QEMU process if still running
-        if let Some(ref mut process) = handle.process {
-            let _ = process.wait_or_kill(std::time::Duration::from_secs(5));
+        // Stop the QEMU process via systemd if still running
+        if let Some(ref process) = handle.process {
+            let _ = process.stop();
         }
 
         // Remove port forwards for this VM
