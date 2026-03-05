@@ -437,41 +437,42 @@ impl VmManager {
             handle.ip
         };
 
-        let actual_host_port = if host_port == 0 {
-            let pf = self.port_forwards.lock().await;
-            pf.auto_allocate(protocol, 10000)
-                .context("no available ports for auto-allocation")?
-        } else {
-            host_port
-        };
-
-        // Check availability
-        {
-            let pf = self.port_forwards.lock().await;
-            if !pf.is_available(actual_host_port, protocol) {
-                anyhow::bail!(
-                    "port {} ({}) is already in use",
-                    actual_host_port,
-                    protocol
-                );
-            }
-        }
-
-        // Add nftables rules
-        self.nftables
-            .add_port_forward(vm_id, guest_ip, actual_host_port, vm_port, protocol)?;
-
-        // Track state
-        let forward = PortForward {
-            vm_id: vm_id.to_string(),
-            host_port: actual_host_port,
-            vm_port,
-            protocol,
-        };
-
-        {
+        // Hold the port forward lock for the entire allocate → check → reserve
+        // sequence to prevent TOCTOU races between concurrent requests.
+        let forward = {
             let mut pf = self.port_forwards.lock().await;
+
+            let actual_host_port = if host_port == 0 {
+                pf.auto_allocate(protocol, 10000)
+                    .context("no available ports for auto-allocation")?
+            } else {
+                if !pf.is_available(host_port, protocol) {
+                    anyhow::bail!("port {} ({}) is already in use", host_port, protocol);
+                }
+                host_port
+            };
+
+            let forward = PortForward {
+                vm_id: vm_id.to_string(),
+                host_port: actual_host_port,
+                vm_port,
+                protocol,
+            };
+
+            // Reserve the port in state before releasing the lock.
             pf.add(forward.clone());
+
+            forward
+        };
+
+        // Add nftables rules (outside the lock — this is a system call).
+        if let Err(e) = self.nftables.add_port_forward(
+            vm_id, guest_ip, forward.host_port, vm_port, protocol,
+        ) {
+            // Roll back the reservation on nftables failure.
+            let mut pf = self.port_forwards.lock().await;
+            pf.remove(forward.host_port, forward.protocol);
+            return Err(e).context("failed to add nftables port forward");
         }
 
         self.update_persisted_port_forwards(vm_id).await;
