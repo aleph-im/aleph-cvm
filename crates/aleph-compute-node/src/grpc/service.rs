@@ -179,6 +179,19 @@ impl ComputeNode for ComputeNodeService {
 
         for d in &req.disks {
             validate_file_path(&d.path, "disk path")?;
+            // Validate disk format against allowlist to prevent QEMU parameter injection.
+            let fmt = if d.format.is_empty() { "raw" } else { &d.format };
+            if fmt != "raw" && fmt != "qcow2" {
+                return Err(Status::invalid_argument(format!(
+                    "unsupported disk format: {fmt} (allowed: raw, qcow2)"
+                )));
+            }
+            // Reject paths containing commas (QEMU option separator).
+            if d.path.contains(',') {
+                return Err(Status::invalid_argument(
+                    "disk path must not contain commas",
+                ));
+            }
         }
 
         let tee = parse_tee_config(req.tee)?;
