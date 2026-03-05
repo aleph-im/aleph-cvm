@@ -22,14 +22,32 @@ pub fn start_vm_unit(vm_id: &str, qemu_args: &[String]) -> Result<()> {
     let mut cmd = std::process::Command::new("systemd-run");
     cmd.args([
         "--unit", &unit,
+        // Lifecycle
         "--property", "Type=simple",
         "--property", "Restart=on-failure",
         "--property", "RestartSec=5s",
         "--property", "KillMode=mixed",
         "--property", "TimeoutStopSec=30",
+        // Logging
         "--property", &format!("SyslogIdentifier={unit}"),
         "--property", "StandardOutput=journal",
         "--property", "StandardError=journal",
+        // Sandboxing — restrict QEMU's capabilities and filesystem access
+        "--property", "NoNewPrivileges=true",
+        "--property", "ProtectSystem=strict",
+        "--property", "PrivateTmp=true",
+        "--property", "ProtectHome=true",
+        "--property", "ProtectKernelTunables=true",
+        "--property", "ProtectKernelModules=true",
+        "--property", "ProtectControlGroups=true",
+        // Device access — only allow what QEMU needs
+        "--property", "DevicePolicy=closed",
+        "--property", "DeviceAllow=/dev/kvm rw",
+        "--property", "DeviceAllow=/dev/sev-guest rw",
+        "--property", "DeviceAllow=/dev/sev rw",
+        "--property", "DeviceAllow=/dev/null rw",
+        "--property", "DeviceAllow=/dev/urandom r",
+        "--property", "DeviceAllow=/dev/net/tun rw",
         "--",
         program,
     ]);
