@@ -108,8 +108,11 @@ if [ -n "$blkdev" ]; then
         fi
     fi
 
-    if [ -x /mnt/root/bin/fib-service ]; then
-        /mnt/root/bin/fib-service &
+    if [ -x /mnt/root/sbin/init ]; then
+        echo "init: starting /sbin/init from rootfs"
+        /bin/busybox chroot /mnt/root /sbin/init &
+    else
+        echo "init: WARNING: no /sbin/init found in rootfs"
     fi
 else
     echo "init: no block device found, skipping rootfs mount"
