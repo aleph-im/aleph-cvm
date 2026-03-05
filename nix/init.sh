@@ -103,6 +103,8 @@ if [ "$luks" = "1" ]; then
             echo "init: unlocking LUKS volume on ${blkdev}"
             if /bin/cryptsetup luksOpen "$blkdev" cryptroot < /tmp/secrets/luks_passphrase 2>&1; then
                 # Securely delete passphrase.
+                # Overwrite passphrase file with zeros before unlinking.
+                /bin/busybox dd if=/dev/zero of=/tmp/secrets/luks_passphrase bs=1 count=$(/bin/busybox stat -c%s /tmp/secrets/luks_passphrase) conv=notrunc 2>/dev/null
                 /bin/busybox rm -f /tmp/secrets/luks_passphrase
 
                 echo "init: mounting /dev/mapper/cryptroot"
@@ -119,6 +121,8 @@ if [ "$luks" = "1" ]; then
                 fi
             else
                 # Delete passphrase even on failure.
+                # Overwrite passphrase file with zeros before unlinking.
+                /bin/busybox dd if=/dev/zero of=/tmp/secrets/luks_passphrase bs=1 count=$(/bin/busybox stat -c%s /tmp/secrets/luks_passphrase) conv=notrunc 2>/dev/null
                 /bin/busybox rm -f /tmp/secrets/luks_passphrase
                 echo "init: FATAL: cryptsetup luksOpen failed — wrong passphrase or corrupt header"
                 exec /bin/busybox poweroff -f
