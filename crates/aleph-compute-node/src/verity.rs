@@ -85,10 +85,17 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
 }
 
 /// Build the kernel command line, optionally including a dm-verity root hash.
-pub fn build_kernel_cmdline(roothash: Option<&str>) -> String {
-    match roothash {
-        Some(hash) => format!("console=ttyS0 root=/dev/mapper/verity-root ro roothash={hash}"),
-        None => "console=ttyS0 root=/dev/vda ro".to_string(),
+///
+/// If `encrypted` is true, emits `luks=1` instead of any verity/root parameters
+/// (the init script will prompt for a key via attest-agent).
+pub fn build_kernel_cmdline(roothash: Option<&str>, encrypted: bool) -> String {
+    if encrypted {
+        "console=ttyS0 luks=1".to_string()
+    } else {
+        match roothash {
+            Some(hash) => format!("console=ttyS0 root=/dev/mapper/verity-root ro roothash={hash}"),
+            None => "console=ttyS0 root=/dev/vda ro".to_string(),
+        }
     }
 }
 
@@ -98,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_build_kernel_cmdline_no_verity() {
-        let cmdline = build_kernel_cmdline(None);
+        let cmdline = build_kernel_cmdline(None, false);
         assert_eq!(cmdline, "console=ttyS0 root=/dev/vda ro");
         assert!(!cmdline.contains("roothash"));
         assert!(!cmdline.contains("verity-root"));
@@ -107,7 +114,7 @@ mod tests {
     #[test]
     fn test_build_kernel_cmdline_with_verity() {
         let hash = "abc123def456";
-        let cmdline = build_kernel_cmdline(Some(hash));
+        let cmdline = build_kernel_cmdline(Some(hash), false);
         assert_eq!(
             cmdline,
             "console=ttyS0 root=/dev/mapper/verity-root ro roothash=abc123def456"
@@ -119,9 +126,23 @@ mod tests {
 
     #[test]
     fn test_build_kernel_cmdline_no_ip() {
-        let none = build_kernel_cmdline(None);
-        let some = build_kernel_cmdline(Some("aabbccdd"));
+        let none = build_kernel_cmdline(None, false);
+        let some = build_kernel_cmdline(Some("aabbccdd"), false);
         assert!(!none.contains("ip="));
         assert!(!some.contains("ip="));
+    }
+
+    #[test]
+    fn test_build_kernel_cmdline_luks() {
+        let cmdline = build_kernel_cmdline(None, true);
+        assert_eq!(cmdline, "console=ttyS0 luks=1");
+        assert!(!cmdline.contains("roothash"));
+        assert!(!cmdline.contains("verity-root"));
+    }
+
+    #[test]
+    fn test_build_kernel_cmdline_luks_ignores_roothash() {
+        let cmdline = build_kernel_cmdline(Some("abc123"), true);
+        assert_eq!(cmdline, "console=ttyS0 luks=1");
     }
 }

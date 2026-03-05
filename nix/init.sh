@@ -41,22 +41,11 @@ else
     fi
 fi
 
-# Parse dm-verity root hash from kernel command line (if present).
+# Parse boot mode from kernel command line.
 roothash=$(/bin/busybox sed -n 's/.*roothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
+luks=$(/bin/busybox sed -n 's/.*luks=\([^ ]*\).*/\1/p' /proc/cmdline)
 
-# Load dm-verity kernel modules if verity is requested.
-if [ -n "$roothash" ]; then
-    echo "init: loading dm-verity kernel modules"
-    /bin/busybox insmod /lib/modules/dax.ko 2>&1 || echo "init: warning: insmod dax.ko failed"
-    /bin/busybox insmod /lib/modules/dm-mod.ko 2>&1 || echo "init: warning: insmod dm-mod.ko failed"
-    /bin/busybox insmod /lib/modules/dm-bufio.ko 2>&1 || echo "init: warning: insmod dm-bufio.ko failed"
-    /bin/busybox insmod /lib/modules/dm-verity.ko 2>&1 || echo "init: warning: insmod dm-verity.ko failed"
-    # Create device-mapper control node (not auto-created without udev).
-    /bin/busybox mkdir -p /dev/mapper
-    /bin/busybox mknod /dev/mapper/control c 10 236
-fi
-
-# Wait for block device to appear.
+# Wait for block device to appear (shared across all boot paths).
 blkdev=""
 n=0
 while [ "$n" -lt 30 ]; do
@@ -70,56 +59,129 @@ while [ "$n" -lt 30 ]; do
     n=$((n + 1))
 done
 
-# Mount rootfs and start user application.
-if [ -n "$blkdev" ]; then
-    /bin/busybox mkdir -p /mnt/root
+if [ -z "$blkdev" ]; then
+    echo "init: no block device found, skipping rootfs mount"
+fi
 
-    if [ -n "$roothash" ]; then
-        # dm-verity: wait for hash tree device (/dev/vdb)
-        hashdev=""
+/bin/busybox mkdir -p /mnt/root
+
+if [ "$luks" = "1" ]; then
+    # ── LUKS encrypted rootfs mode ──────────────────────────────────────
+
+    # Load dm-crypt kernel modules.
+    echo "init: loading dm-crypt kernel modules"
+    /bin/busybox insmod /lib/modules/dm-mod.ko 2>&1 || echo "init: warning: insmod dm-mod.ko failed"
+    /bin/busybox insmod /lib/modules/dm-crypt.ko 2>&1 || echo "init: warning: insmod dm-crypt.ko failed"
+
+    # Create device-mapper control node (not auto-created without udev).
+    /bin/busybox mkdir -p /dev/mapper
+    /bin/busybox mknod /dev/mapper/control c 10 236 2>/dev/null
+
+    # Start attestation agent early so users can inject the LUKS passphrase.
+    echo "init: starting attestation agent (early, for LUKS key injection)"
+    /bin/aleph-attest-agent --port 8443 --upstream http://127.0.0.1:8080 &
+
+    if [ -n "$blkdev" ]; then
+        # Poll for the LUKS passphrase (injected via attestation agent).
+        echo "init: waiting for LUKS passphrase at /tmp/secrets/luks_passphrase (timeout 300s)"
+        /bin/busybox mkdir -p /tmp/secrets
         n=0
-        while [ "$n" -lt 30 ]; do
-            if [ -b /dev/vdb ]; then
-                hashdev="/dev/vdb"
+        while [ "$n" -lt 3000 ]; do
+            if [ -f /tmp/secrets/luks_passphrase ]; then
                 break
             fi
             /bin/busybox sleep 0.1
             n=$((n + 1))
         done
 
-        if [ -z "$hashdev" ]; then
-            echo "init: FATAL: roothash set but /dev/vdb (hash tree) not found"
+        if [ ! -f /tmp/secrets/luks_passphrase ]; then
+            echo "init: FATAL: timed out waiting for LUKS passphrase"
         else
-            echo "init: setting up dm-verity on ${blkdev} with hash tree ${hashdev}"
-            echo "init: roothash=${roothash}"
-            if /bin/veritysetup open "$blkdev" verity-root "$hashdev" "$roothash" 2>&1; then
-                echo "init: mounting /dev/mapper/verity-root"
-                /bin/busybox mount -t ext4 -o ro /dev/mapper/verity-root /mnt/root || echo "init: verity mount failed"
+            echo "init: unlocking LUKS volume on ${blkdev}"
+            if /bin/cryptsetup luksOpen "$blkdev" cryptroot < /tmp/secrets/luks_passphrase 2>&1; then
+                # Securely delete passphrase.
+                /bin/busybox rm -f /tmp/secrets/luks_passphrase
+
+                echo "init: mounting /dev/mapper/cryptroot"
+                if /bin/busybox mount -t ext4 /dev/mapper/cryptroot /mnt/root 2>&1; then
+                    if [ -x /mnt/root/sbin/init ]; then
+                        echo "init: starting /sbin/init from rootfs"
+                        /bin/busybox chroot /mnt/root /sbin/init &
+                    else
+                        echo "init: WARNING: no /sbin/init found in rootfs"
+                    fi
+                else
+                    echo "init: FATAL: failed to mount /dev/mapper/cryptroot"
+                fi
             else
-                echo "init: FATAL: dm-verity verification failed — rootfs may be tampered"
+                # Delete passphrase even on failure.
+                /bin/busybox rm -f /tmp/secrets/luks_passphrase
+                echo "init: FATAL: cryptsetup luksOpen failed — wrong passphrase or corrupt header"
             fi
         fi
-    else
-        # No dm-verity: direct mount (backwards compatible)
-        echo "init: mounting ${blkdev} (no dm-verity)"
-        if ! /bin/busybox mount -o ro "$blkdev" /mnt/root; then
-            echo "init: mount failed, trying without readonly"
-            /bin/busybox mount "$blkdev" /mnt/root || echo "init: mount failed completely"
+    fi
+
+else
+    # ── Non-LUKS mode (dm-verity or plain mount) ───────────────────────
+
+    # Load dm-verity kernel modules if verity is requested.
+    if [ -n "$roothash" ]; then
+        echo "init: loading dm-verity kernel modules"
+        /bin/busybox insmod /lib/modules/dax.ko 2>&1 || echo "init: warning: insmod dax.ko failed"
+        /bin/busybox insmod /lib/modules/dm-mod.ko 2>&1 || echo "init: warning: insmod dm-mod.ko failed"
+        /bin/busybox insmod /lib/modules/dm-bufio.ko 2>&1 || echo "init: warning: insmod dm-bufio.ko failed"
+        /bin/busybox insmod /lib/modules/dm-verity.ko 2>&1 || echo "init: warning: insmod dm-verity.ko failed"
+        # Create device-mapper control node (not auto-created without udev).
+        /bin/busybox mkdir -p /dev/mapper
+        /bin/busybox mknod /dev/mapper/control c 10 236
+    fi
+
+    if [ -n "$blkdev" ]; then
+        if [ -n "$roothash" ]; then
+            # dm-verity: wait for hash tree device (/dev/vdb)
+            hashdev=""
+            n=0
+            while [ "$n" -lt 30 ]; do
+                if [ -b /dev/vdb ]; then
+                    hashdev="/dev/vdb"
+                    break
+                fi
+                /bin/busybox sleep 0.1
+                n=$((n + 1))
+            done
+
+            if [ -z "$hashdev" ]; then
+                echo "init: FATAL: roothash set but /dev/vdb (hash tree) not found"
+            else
+                echo "init: setting up dm-verity on ${blkdev} with hash tree ${hashdev}"
+                echo "init: roothash=${roothash}"
+                if /bin/veritysetup open "$blkdev" verity-root "$hashdev" "$roothash" 2>&1; then
+                    echo "init: mounting /dev/mapper/verity-root"
+                    /bin/busybox mount -t ext4 -o ro /dev/mapper/verity-root /mnt/root || echo "init: verity mount failed"
+                else
+                    echo "init: FATAL: dm-verity verification failed — rootfs may be tampered"
+                fi
+            fi
+        else
+            # No dm-verity: direct mount (backwards compatible)
+            echo "init: mounting ${blkdev} (no dm-verity)"
+            if ! /bin/busybox mount -o ro "$blkdev" /mnt/root; then
+                echo "init: mount failed, trying without readonly"
+                /bin/busybox mount "$blkdev" /mnt/root || echo "init: mount failed completely"
+            fi
+        fi
+
+        if [ -x /mnt/root/sbin/init ]; then
+            echo "init: starting /sbin/init from rootfs"
+            /bin/busybox chroot /mnt/root /sbin/init &
+        else
+            echo "init: WARNING: no /sbin/init found in rootfs"
         fi
     fi
 
-    if [ -x /mnt/root/sbin/init ]; then
-        echo "init: starting /sbin/init from rootfs"
-        /bin/busybox chroot /mnt/root /sbin/init &
-    else
-        echo "init: WARNING: no /sbin/init found in rootfs"
-    fi
-else
-    echo "init: no block device found, skipping rootfs mount"
+    # Start the attestation agent (after rootfs mount in non-LUKS mode).
+    /bin/aleph-attest-agent --port 8443 --upstream http://127.0.0.1:8080 &
 fi
-
-# Start the attestation agent.
-/bin/aleph-attest-agent --port 8443 --upstream http://127.0.0.1:8080 &
 
 # Wait for children.
 wait

@@ -180,6 +180,9 @@ pub struct TrustedExecutionEnvironment {
     /// SEV policy flags.
     #[serde(default)]
     pub policy: u64,
+    /// Whether the rootfs is LUKS-encrypted (user injects key via attest-agent).
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 // ── Code (programs only) ────────────────────────────────────────────────────
@@ -306,6 +309,15 @@ impl ExecutableMessage {
             .trusted_execution
             .as_ref()
             .map(|t| t.policy)
+    }
+
+    /// Whether the rootfs is LUKS-encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.environment
+            .as_ref()
+            .and_then(|e| e.trusted_execution.as_ref())
+            .map(|t| t.encrypted)
+            .unwrap_or(false)
     }
 }
 

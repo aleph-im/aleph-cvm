@@ -1,5 +1,6 @@
 mod attestation;
 mod proxy;
+mod secrets;
 mod tls;
 
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use clap::Parser;
 use tracing::info;
 
 use proxy::{attestation_endpoint, proxy_handler, AppState};
+use secrets::inject_secret_handler;
 use tls::{build_rustls_config, generate_attested_tls_identity};
 
 /// Aleph attestation agent — in-VM sidecar that provides attested HTTPS
@@ -75,6 +77,10 @@ async fn main() -> Result<()> {
             .route(
                 "/.well-known/attestation",
                 web::get().to(attestation_endpoint),
+            )
+            .route(
+                "/confidential/inject-secret",
+                web::post().to(inject_secret_handler),
             )
             .default_service(web::to(proxy_handler))
     })

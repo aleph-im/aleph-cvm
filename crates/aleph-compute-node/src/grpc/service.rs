@@ -160,6 +160,7 @@ impl ComputeNode for ComputeNodeService {
             vcpus: req.vcpus,
             memory_mb: req.memory_mb,
             tee,
+            encrypted: req.encrypted,
         };
 
         let info = self

@@ -67,6 +67,10 @@ enum Command {
         /// Requested IPv6 prefix length (0 = /128).
         #[arg(long, default_value_t = 0)]
         ipv6_prefix_len: u32,
+
+        /// LUKS encrypted rootfs (user injects key via attest-agent).
+        #[arg(long, default_value_t = false)]
+        encrypted: bool,
     },
 
     /// Get information about a VM.
@@ -194,6 +198,7 @@ async fn main() -> Result<()> {
             tee_backend,
             ipv6_address,
             ipv6_prefix_len,
+            encrypted,
         } => {
             let disks: Vec<DiskConfig> = disk
                 .iter()
@@ -216,6 +221,7 @@ async fn main() -> Result<()> {
                     tee,
                     ipv6_address,
                     ipv6_prefix_len,
+                    encrypted,
                 })
                 .await
                 .context("CreateVm RPC failed")?

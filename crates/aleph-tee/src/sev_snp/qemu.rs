@@ -66,6 +66,7 @@ mod tests {
                 backend: TeeType::SevSnp,
                 policy: policy.map(|s| s.to_string()),
             },
+            encrypted: false,
         }
     }
 

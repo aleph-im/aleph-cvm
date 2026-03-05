@@ -138,6 +138,7 @@ pub async fn translate_message(
         tee,
         ipv6_address: String::new(),
         ipv6_prefix_len: 0,
+        encrypted: msg.is_encrypted(),
     };
 
     info!(

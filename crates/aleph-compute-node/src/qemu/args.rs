@@ -123,6 +123,7 @@ mod tests {
                 backend: TeeType::SevSnp,
                 policy: Some("0x30000".into()),
             },
+            encrypted: false,
         }
     }
 
