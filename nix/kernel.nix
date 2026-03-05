@@ -40,6 +40,13 @@ pkgs.linuxPackages_6_6.kernel.override {
     VIRTIO_NET = lib.mkForce yes;
     VIRTIO_CONSOLE = lib.mkForce yes;
 
+    # Hardening — these are default=y upstream, but we set them explicitly
+    # so a config change never silently drops them.
+    RANDOMIZE_BASE = lib.mkForce yes;       # KASLR
+    STACKPROTECTOR_STRONG = lib.mkForce yes;
+    FORTIFY_SOURCE = lib.mkForce yes;
+    HARDENED_USERCOPY = lib.mkForce yes;
+
     # Note: MODULES left as default (yes) to avoid interactive config questions.
     # For a minimal production kernel, use a fully custom .config instead.
   };
