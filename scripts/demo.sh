@@ -463,7 +463,7 @@ ATTEST_CLI="${ARTIFACTS_DIR}/aleph-attest-cli"
 TOTAL=$((TOTAL + 1))
 info "Test: TLS-bound attestation + measurement pinning (Layer 2)"
 if [[ -x "$ATTEST_CLI" ]]; then
-    ATTEST_OUTPUT=$("$ATTEST_CLI" \
+    ATTEST_OUTPUT=$("$ATTEST_CLI" attest \
         --url "${VM_URL}/health" \
         --amd-product "$AMD_PRODUCT" \
         --expected-measurement "$EXPECTED_MEASUREMENT" \
@@ -497,9 +497,8 @@ fi
 TOTAL=$((TOTAL + 1))
 info "Test: Fresh attestation + nonce + measurement pinning (Layer 3)"
 if [[ -x "$ATTEST_CLI" ]]; then
-    FRESH_OUTPUT=$("$ATTEST_CLI" \
+    FRESH_OUTPUT=$("$ATTEST_CLI" fresh-attest \
         --url "${VM_URL}" \
-        --fresh-attest \
         --amd-product "$AMD_PRODUCT" \
         --expected-measurement "$EXPECTED_MEASUREMENT" \
         2>&1) || true
