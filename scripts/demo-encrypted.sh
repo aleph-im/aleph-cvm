@@ -202,7 +202,7 @@ info "Passphrase:   ${LUKS_PASSPHRASE}"
 truncate -s "$LUKS_SIZE" "$LUKS_IMG"
 
 info "Formatting as LUKS..."
-echo -n "$LUKS_PASSPHRASE" | cryptsetup luksFormat --batch-mode "$LUKS_IMG" -
+echo -n "$LUKS_PASSPHRASE" | cryptsetup luksFormat --batch-mode --pbkdf pbkdf2 "$LUKS_IMG" -
 
 info "Opening LUKS container..."
 echo -n "$LUKS_PASSPHRASE" | cryptsetup luksOpen "$LUKS_IMG" demo-cryptroot -
