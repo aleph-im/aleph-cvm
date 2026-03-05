@@ -228,21 +228,15 @@ impl VmManager {
             info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
             verity::build_kernel_cmdline(None, true)
         } else if let Some(rootfs_disk) = config.disks.first() {
-            match verity::ensure_verity(&rootfs_disk.path) {
-                Ok(vinfo) => {
-                    // Insert hash tree as second disk (right after rootfs)
-                    config.disks.insert(1, aleph_tee::types::DiskConfig {
-                        path: vinfo.hashtree_path,
-                        readonly: true,
-                        format: "raw".to_string(),
-                    });
-                    verity::build_kernel_cmdline(Some(&vinfo.root_hash), false)
-                }
-                Err(e) => {
-                    warn!(vm_id = %vm_id, error = %e, "dm-verity setup failed, falling back to direct mount");
-                    verity::build_kernel_cmdline(None, false)
-                }
-            }
+            let vinfo = verity::ensure_verity(&rootfs_disk.path)
+                .context("dm-verity setup failed — refusing to boot without integrity verification")?;
+            // Insert hash tree as second disk (right after rootfs)
+            config.disks.insert(1, aleph_tee::types::DiskConfig {
+                path: vinfo.hashtree_path,
+                readonly: true,
+                format: "raw".to_string(),
+            });
+            verity::build_kernel_cmdline(Some(&vinfo.root_hash), false)
         } else {
             verity::build_kernel_cmdline(None, false)
         };
