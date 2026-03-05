@@ -13,11 +13,14 @@ pub fn unit_name(vm_id: &str) -> String {
 ///
 /// Uses `systemd-run` to create a transient unit with restart-on-failure.
 /// The unit is named `aleph-cvm-vm-{vm_id}.service`.
-pub fn start_vm_unit(vm_id: &str, qemu_args: &[String]) -> Result<()> {
+pub fn start_vm_unit(vm_id: &str, qemu_args: &[String], run_dir: &std::path::Path) -> Result<()> {
     let unit = unit_name(vm_id);
     let (program, args) = qemu_args
         .split_first()
         .context("empty qemu args")?;
+
+    // ReadWritePaths for QMP socket and VM runtime directory.
+    let rw_paths = format!("ReadWritePaths={}", run_dir.display());
 
     let mut cmd = std::process::Command::new("systemd-run");
     cmd.args([
@@ -32,10 +35,13 @@ pub fn start_vm_unit(vm_id: &str, qemu_args: &[String]) -> Result<()> {
         "--property", &format!("SyslogIdentifier={unit}"),
         "--property", "StandardOutput=journal",
         "--property", "StandardError=journal",
-        // Sandboxing — restrict QEMU's capabilities and filesystem access
+        // Sandboxing — restrict QEMU's capabilities and filesystem access.
+        // PrivateTmp gives QEMU its own /tmp, preventing access to host /tmp.
+        // VM artifacts (kernel, initrd, disk images) MUST NOT live under /tmp.
         "--property", "NoNewPrivileges=true",
-        "--property", "ProtectSystem=strict",
         "--property", "PrivateTmp=true",
+        "--property", "ProtectSystem=strict",
+        "--property", &rw_paths,
         "--property", "ProtectHome=true",
         "--property", "ProtectKernelTunables=true",
         "--property", "ProtectKernelModules=true",
