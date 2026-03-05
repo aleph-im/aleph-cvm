@@ -89,7 +89,15 @@ pub async fn verify_sev_snp_report(
     })
 }
 
+/// Known AMD ARK issuer/subject Common Name patterns.
+///
+/// AMD's Root Key certificates use CN = "ARK-{product}" (e.g., "ARK-Milan", "ARK-Genoa").
+/// The Organization is always "Advanced Micro Devices".
+const AMD_ARK_CN_PREFIX: &str = "ARK-";
+const AMD_ORG_NAME: &str = "Advanced Micro Devices";
+
 /// Verify the AMD certificate chain:
+/// - ARK has a valid AMD subject (CN = "ARK-{product}", O = "Advanced Micro Devices")
 /// - ARK is self-signed
 /// - ASK is signed by ARK
 /// - VCEK is signed by ASK
@@ -100,6 +108,12 @@ pub fn verify_cert_chain(chain: &CertChain) -> Result<()> {
         .context("failed to parse ASK certificate")?;
     let vcek = X509::from_der(&chain.vcek_der)
         .context("failed to parse VCEK certificate")?;
+
+    // Verify the ARK certificate belongs to AMD by checking subject fields.
+    // This prevents cache-poisoning attacks where an attacker replaces the
+    // cached ARK with a self-signed cert from a different issuer.
+    verify_ark_identity(&ark)
+        .context("ARK identity verification failed")?;
 
     // Verify ARK is self-signed
     let ark_pubkey = ark.public_key()
@@ -124,6 +138,67 @@ pub fn verify_cert_chain(chain: &CertChain) -> Result<()> {
         .context("failed to verify VCEK signature")?
     {
         bail!("VCEK certificate is not signed by ASK");
+    }
+
+    Ok(())
+}
+
+/// Verify that an ARK certificate has AMD's expected subject identity.
+///
+/// Checks:
+/// - Subject CN starts with "ARK-" (e.g., "ARK-Milan", "ARK-Genoa", "ARK-Turin")
+/// - Subject O is "Advanced Micro Devices"
+/// - Issuer matches subject (self-issued)
+fn verify_ark_identity(ark: &X509) -> Result<()> {
+    let subject = ark.subject_name();
+    let issuer = ark.issuer_name();
+
+    // Extract CN from subject
+    let cn_nid = openssl::nid::Nid::COMMONNAME;
+    let cn = subject
+        .entries_by_nid(cn_nid)
+        .next()
+        .context("ARK certificate has no Common Name in subject")?;
+    let cn_str = cn
+        .data()
+        .as_utf8()
+        .context("ARK CN is not valid UTF-8")?;
+
+    let cn_str: &str = &cn_str;
+    if !cn_str.starts_with(AMD_ARK_CN_PREFIX) {
+        bail!(
+            "ARK certificate CN '{}' does not start with expected prefix '{}'",
+            cn_str,
+            AMD_ARK_CN_PREFIX,
+        );
+    }
+
+    // Extract O (Organization) from subject
+    let org_nid = openssl::nid::Nid::ORGANIZATIONNAME;
+    let org = subject
+        .entries_by_nid(org_nid)
+        .next()
+        .context("ARK certificate has no Organization in subject")?;
+    let org_str = org
+        .data()
+        .as_utf8()
+        .context("ARK Organization is not valid UTF-8")?;
+
+    let org_str: &str = &org_str;
+    if org_str != AMD_ORG_NAME {
+        bail!(
+            "ARK certificate Organization '{}' does not match expected '{}'",
+            org_str,
+            AMD_ORG_NAME,
+        );
+    }
+
+    // Verify issuer == subject (ARK must be self-issued)
+    // Compare the DER encoding of issuer and subject names.
+    let subject_der = subject.to_der().context("failed to encode subject to DER")?;
+    let issuer_der = issuer.to_der().context("failed to encode issuer to DER")?;
+    if subject_der != issuer_der {
+        bail!("ARK certificate issuer does not match subject (not self-issued)");
     }
 
     Ok(())
