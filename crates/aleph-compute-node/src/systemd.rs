@@ -13,14 +13,23 @@ pub fn unit_name(vm_id: &str) -> String {
 ///
 /// Uses `systemd-run` to create a transient unit with restart-on-failure.
 /// The unit is named `aleph-cvm-vm-{vm_id}.service`.
-pub fn start_vm_unit(vm_id: &str, qemu_args: &[String], run_dir: &std::path::Path) -> Result<()> {
+pub fn start_vm_unit(
+    vm_id: &str,
+    qemu_args: &[String],
+    run_dir: &std::path::Path,
+    rw_dirs: &[&std::path::Path],
+) -> Result<()> {
     let unit = unit_name(vm_id);
     let (program, args) = qemu_args
         .split_first()
         .context("empty qemu args")?;
 
-    // ReadWritePaths for QMP socket and VM runtime directory.
-    let rw_paths = format!("ReadWritePaths={}", run_dir.display());
+    // ReadWritePaths: VM runtime dir (QMP socket) + any writable disk directories.
+    let mut rw_path_list = vec![run_dir.display().to_string()];
+    for dir in rw_dirs {
+        rw_path_list.push(dir.display().to_string());
+    }
+    let rw_paths = format!("ReadWritePaths={}", rw_path_list.join(" "));
 
     let mut cmd = std::process::Command::new("systemd-run");
     cmd.args([

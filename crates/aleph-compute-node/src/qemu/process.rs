@@ -17,7 +17,14 @@ impl QemuProcess {
     /// Start a QEMU process as a systemd transient unit.
     ///
     /// Creates the VM runtime directory, then delegates to `systemd-run`.
-    pub fn spawn(args: &[String], paths: QemuPaths, vm_id: String) -> Result<Self> {
+    /// `rw_dirs` lists additional directories QEMU needs write access to
+    /// (e.g. directories containing writable disk images).
+    pub fn spawn(
+        args: &[String],
+        paths: QemuPaths,
+        vm_id: String,
+        rw_dirs: &[&std::path::Path],
+    ) -> Result<Self> {
         // Create the runtime directory for QMP socket, serial log, etc.
         let vm_dir = paths
             .qmp_socket
@@ -29,7 +36,7 @@ impl QemuProcess {
         // Clean up any leftover failed unit from a previous run
         systemd::reset_failed_unit(&vm_id);
 
-        systemd::start_vm_unit(&vm_id, args, vm_dir)?;
+        systemd::start_vm_unit(&vm_id, args, vm_dir, rw_dirs)?;
 
         info!(vm_id = %vm_id, "QEMU started via systemd");
 
