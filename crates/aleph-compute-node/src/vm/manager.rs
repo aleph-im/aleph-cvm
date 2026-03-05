@@ -553,6 +553,31 @@ impl VmManager {
                 }
             }
 
+            // For running VMs, replay nftables and NDP proxy rules.
+            // These are kernel state that may have been lost (e.g., manual
+            // nft flush, or host reboot where the VM somehow survived).
+            // All nftables helpers are idempotent (*_if_not_present).
+            if state == VmState::Running {
+                if let Err(e) = self.nftables.setup_vm(&vm_id, &pvm.tap_name) {
+                    warn!(vm_id = %vm_id, error = %e, "failed to restore nftables for recovered VM");
+                }
+
+                // Replay port forward nftables rules
+                for fwd in &pvm.port_forwards {
+                    if let Err(e) = self.nftables.add_port_forward(
+                        &vm_id, pvm.ip, fwd.host_port, fwd.vm_port, fwd.protocol,
+                    ) {
+                        warn!(vm_id = %vm_id, port = fwd.host_port, error = %e,
+                            "failed to restore port forward for recovered VM");
+                    }
+                }
+
+                // Replay NDP proxy for IPv6
+                if let (Some(ipv6), Some(ndp)) = (&pvm.ipv6, &self.ndp_proxy) {
+                    ndp.add_range(&pvm.tap_name, *ipv6).await;
+                }
+            }
+
             let handle = VmHandle {
                 config: pvm.config,
                 state,
