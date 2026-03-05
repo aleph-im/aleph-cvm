@@ -65,12 +65,12 @@ impl TeeBackend for SevSnpBackend {
         }
     }
 
-    /// Verify an attestation report.
+    /// Verify an attestation report (synchronous — NOT cryptographically verified).
     ///
-    /// This is a stub implementation that parses the report to confirm it is
-    /// structurally valid and returns a placeholder verification result.
-    /// Real cryptographic verification (certificate chain validation, signature
-    /// checking) will be implemented in Task 4.
+    /// This method only performs structural validation. It intentionally returns
+    /// `valid: false` because real cryptographic verification requires async
+    /// network calls to fetch AMD certificates. Use `verify_sev_snp_report()`
+    /// from the `verify` module for full verification.
     fn verify_report(&self, report: &AttestationReport) -> Result<VerificationResult> {
         // Parse the raw report to confirm structural validity
         let parsed = parse_sev_snp_report(&report.data)
@@ -79,10 +79,11 @@ impl TeeBackend for SevSnpBackend {
         let measurement = extract_measurement(&parsed).to_vec();
 
         Ok(VerificationResult {
-            valid: true, // Stub: real verification in Task 4
+            valid: false,
             tee_type: TeeType::SevSnp,
             summary: format!(
-                "SEV-SNP report parsed successfully (product: {}, stub verification)",
+                "SEV-SNP report parsed but NOT cryptographically verified (product: {}). \
+                 Use verify_sev_snp_report() for full async verification.",
                 self.product
             ),
             measurement,
@@ -91,7 +92,7 @@ impl TeeBackend for SevSnpBackend {
                 "guest_svn": parsed.inner.guest_svn,
                 "vmpl": parsed.inner.vmpl,
                 "verified": false,
-                "note": "stub verification - cryptographic validation not yet implemented"
+                "note": "structural validation only — use verify_sev_snp_report() for cryptographic verification"
             }),
         })
     }
@@ -193,13 +194,13 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_report_stub() {
+    fn test_verify_report_returns_not_valid() {
         use sev::firmware::guest::AttestationReport as SevAR;
         use sev::parser::Encoder;
 
         let backend = SevSnpBackend::new("Milan");
 
-        // Create a valid report
+        // Create a structurally valid report
         let mut sev_report = SevAR {
             version: 3,
             report_data: [0x42; 64],
@@ -217,9 +218,11 @@ mod tests {
         let report = backend.parse_report(&buf).unwrap();
         let result = backend.verify_report(&report).unwrap();
 
-        assert!(result.valid);
+        // Synchronous verify_report intentionally returns valid=false;
+        // callers must use verify_sev_snp_report() for real verification.
+        assert!(!result.valid);
         assert_eq!(result.tee_type, TeeType::SevSnp);
         assert_eq!(result.measurement, vec![0xAB; 48]);
-        assert!(result.summary.contains("Milan"));
+        assert!(result.summary.contains("NOT cryptographically verified"));
     }
 }
