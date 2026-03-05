@@ -68,13 +68,14 @@ fi
 if [ "$luks" = "1" ]; then
     # ── LUKS encrypted rootfs mode ──────────────────────────────────────
 
-    # Load dm-crypt kernel modules.
+    # Load dm-crypt kernel modules (dax → dm-mod → dm-crypt).
     echo "init: loading dm-crypt kernel modules"
+    /bin/busybox insmod /lib/modules/dax.ko 2>&1 || echo "init: warning: insmod dax.ko failed"
     /bin/busybox insmod /lib/modules/dm-mod.ko 2>&1 || echo "init: warning: insmod dm-mod.ko failed"
     /bin/busybox insmod /lib/modules/dm-crypt.ko 2>&1 || echo "init: warning: insmod dm-crypt.ko failed"
 
-    # Create device-mapper control node (not auto-created without udev).
-    /bin/busybox mkdir -p /dev/mapper
+    # Create device-mapper control node and cryptsetup lock dir (no udev).
+    /bin/busybox mkdir -p /dev/mapper /run/cryptsetup
     /bin/busybox mknod /dev/mapper/control c 10 236 2>/dev/null
 
     # Start attestation agent early so users can inject the LUKS passphrase.
