@@ -60,7 +60,8 @@ while [ "$n" -lt 30 ]; do
 done
 
 if [ -z "$blkdev" ]; then
-    echo "init: no block device found, skipping rootfs mount"
+    echo "init: FATAL: no block device found"
+    exec /bin/busybox poweroff -f
 fi
 
 /bin/busybox mkdir -p /mnt/root
@@ -97,6 +98,7 @@ if [ "$luks" = "1" ]; then
 
         if [ ! -f /tmp/secrets/luks_passphrase ]; then
             echo "init: FATAL: timed out waiting for LUKS passphrase"
+            exec /bin/busybox poweroff -f
         else
             echo "init: unlocking LUKS volume on ${blkdev}"
             if /bin/cryptsetup luksOpen "$blkdev" cryptroot < /tmp/secrets/luks_passphrase 2>&1; then
@@ -113,11 +115,13 @@ if [ "$luks" = "1" ]; then
                     fi
                 else
                     echo "init: FATAL: failed to mount /dev/mapper/cryptroot"
+                    exec /bin/busybox poweroff -f
                 fi
             else
                 # Delete passphrase even on failure.
                 /bin/busybox rm -f /tmp/secrets/luks_passphrase
                 echo "init: FATAL: cryptsetup luksOpen failed — wrong passphrase or corrupt header"
+                exec /bin/busybox poweroff -f
             fi
         fi
     fi
@@ -153,14 +157,19 @@ else
 
             if [ -z "$hashdev" ]; then
                 echo "init: FATAL: roothash set but /dev/vdb (hash tree) not found"
+                exec /bin/busybox poweroff -f
             else
                 echo "init: setting up dm-verity on ${blkdev} with hash tree ${hashdev}"
                 echo "init: roothash=${roothash}"
                 if /bin/veritysetup open "$blkdev" verity-root "$hashdev" "$roothash" 2>&1; then
                     echo "init: mounting /dev/mapper/verity-root"
-                    /bin/busybox mount -t ext4 -o ro /dev/mapper/verity-root /mnt/root || echo "init: verity mount failed"
+                    if ! /bin/busybox mount -t ext4 -o ro /dev/mapper/verity-root /mnt/root; then
+                        echo "init: FATAL: verity mount failed"
+                        exec /bin/busybox poweroff -f
+                    fi
                 else
                     echo "init: FATAL: dm-verity verification failed — rootfs may be tampered"
+                    exec /bin/busybox poweroff -f
                 fi
             fi
         else
