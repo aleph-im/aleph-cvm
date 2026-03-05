@@ -32,7 +32,7 @@ else
         mask=$(echo "$kernel_ip" | /bin/busybox cut -d: -f5)
         echo "init: static IP ${client_ip}/${mask} gw ${gateway} on ${iface}"
         /bin/busybox ip link set "$iface" up
-        /bin/busybox ip addr add "${client_ip}/24" dev "$iface"
+        /bin/busybox ip addr add "${client_ip}/${mask}" dev "$iface"
         /bin/busybox ip route add default via "$gateway"
     else
         echo "init: bringing up ${iface} via DHCP"
