@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,7 +74,8 @@ pub struct VmManager {
     state_dir: PathBuf,
     bridge: String,
     gateway_ip: Ipv4Addr,
-    next_ip_offset: RwLock<u8>,
+    /// Tracks used IP offsets from the gateway. Offsets are reclaimed on VM deletion.
+    used_ip_offsets: RwLock<BTreeSet<u8>>,
     tee_backend: Arc<dyn TeeBackend>,
     dhcp_hostsdir: Option<PathBuf>,
     nftables: NftablesManager,
@@ -119,7 +120,7 @@ impl VmManager {
             state_dir,
             bridge,
             gateway_ip,
-            next_ip_offset: RwLock::new(1),
+            used_ip_offsets: RwLock::new(BTreeSet::new()),
             tee_backend,
             dhcp_hostsdir,
             nftables,
@@ -153,12 +154,15 @@ impl VmManager {
             }
         }
 
-        // Allocate IP and derive MAC
+        // Allocate IP and derive MAC — find lowest free offset (1..=254).
+        // Offset 0 is the gateway itself; 255 is broadcast.
         let offset = {
-            let mut off = self.next_ip_offset.write().await;
-            let current = *off;
-            *off = off.wrapping_add(1);
-            current
+            let mut used = self.used_ip_offsets.write().await;
+            let free = (1u8..=254).find(|o| !used.contains(o));
+            match free {
+                Some(o) => { used.insert(o); o }
+                None => anyhow::bail!("IPv4 address pool exhausted (254 VMs max)"),
+            }
         };
         let vm_ip = network::allocate_vm_ip(self.gateway_ip, offset);
         let mac_addr = network::mac_for_vm_ip(vm_ip);
@@ -394,6 +398,12 @@ impl VmManager {
             }
         }
 
+        // Reclaim IP offset
+        {
+            let ip_offset = handle.ip.octets()[3].wrapping_sub(self.gateway_ip.octets()[3]);
+            self.used_ip_offsets.write().await.remove(&ip_offset);
+        }
+
         // Delete persisted state
         if let Err(e) = persistence::delete_vm(&self.state_dir, id) {
             warn!(vm_id = %id, error = %e, "failed to delete VM state file");
@@ -525,19 +535,15 @@ impl VmManager {
         info!(count = persisted_vms.len(), "recovering VMs from persisted state");
 
         let mut vms = self.vms.write().await;
-        let mut max_offset: u8 = 0;
+        let mut used_offsets = self.used_ip_offsets.write().await;
 
         for pvm in persisted_vms {
             let vm_id = pvm.config.vm_id.clone();
             let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
 
-            // Track highest IP offset to avoid collisions for new VMs
-            let last_octet = pvm.ip.octets()[3];
-            let gateway_last = self.gateway_ip.octets()[3];
-            let offset = last_octet.wrapping_sub(gateway_last);
-            if offset > max_offset {
-                max_offset = offset;
-            }
+            // Register this IP offset as used
+            let offset = pvm.ip.octets()[3].wrapping_sub(self.gateway_ip.octets()[3]);
+            used_offsets.insert(offset);
 
             // Try to reconnect to running systemd unit
             let (process, state) = match QemuProcess::reconnect(paths, vm_id.clone()) {
@@ -605,9 +611,6 @@ impl VmManager {
             );
             vms.insert(vm_id, handle);
         }
-
-        // Update next_ip_offset to avoid collisions
-        *self.next_ip_offset.write().await = max_offset.wrapping_add(1);
 
         Ok(())
     }
