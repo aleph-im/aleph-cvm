@@ -29,7 +29,7 @@ impl QemuProcess {
         // Clean up any leftover failed unit from a previous run
         systemd::reset_failed_unit(&vm_id);
 
-        systemd::start_vm_unit(&vm_id, args)?;
+        systemd::start_vm_unit(&vm_id, args, vm_dir)?;
 
         info!(vm_id = %vm_id, "QEMU started via systemd");
 
