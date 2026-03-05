@@ -253,8 +253,16 @@ impl VmManager {
             &kernel_cmdline,
         ));
 
+        // Collect parent directories of writable disks for ReadWritePaths.
+        let rw_dirs: Vec<&std::path::Path> = config
+            .disks
+            .iter()
+            .filter(|d| !d.readonly)
+            .filter_map(|d| d.path.parent())
+            .collect();
+
         // Spawn QEMU
-        let process = match QemuProcess::spawn(&args, paths, vm_id.clone()) {
+        let process = match QemuProcess::spawn(&args, paths, vm_id.clone(), &rw_dirs) {
             Ok(p) => p,
             Err(e) => {
                 error!(vm_id = %vm_id, error = %e, "failed to spawn QEMU");
