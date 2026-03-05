@@ -97,6 +97,7 @@ mod tests {
                     backend: TeeType::SevSnp,
                     policy: None,
                 },
+                encrypted: false,
             },
             ip: Ipv4Addr::new(10, 0, 100, 2),
             ipv6: None,

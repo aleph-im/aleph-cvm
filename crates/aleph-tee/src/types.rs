@@ -57,6 +57,9 @@ pub struct VmConfig {
     pub vcpus: u32,
     pub memory_mb: u32,
     pub tee: TeeConfig,
+    /// LUKS encrypted rootfs mode (skip dm-verity, user injects key via attest-agent).
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

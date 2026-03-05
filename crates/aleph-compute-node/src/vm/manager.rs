@@ -221,8 +221,13 @@ impl VmManager {
             ndp.add_range(&tap_name, *ipv6).await;
         }
 
-        // Compute dm-verity for the rootfs (first disk)
-        let kernel_cmdline = if let Some(rootfs_disk) = config.disks.first() {
+        // Compute dm-verity for the rootfs (first disk), or skip if LUKS encrypted
+        let encrypted = config.encrypted;
+        let kernel_cmdline = if encrypted {
+            // LUKS mode: skip dm-verity, user will inject key via attest-agent.
+            info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
+            verity::build_kernel_cmdline(None, true)
+        } else if let Some(rootfs_disk) = config.disks.first() {
             match verity::ensure_verity(&rootfs_disk.path) {
                 Ok(vinfo) => {
                     // Insert hash tree as second disk (right after rootfs)
@@ -231,15 +236,15 @@ impl VmManager {
                         readonly: true,
                         format: "raw".to_string(),
                     });
-                    verity::build_kernel_cmdline(Some(&vinfo.root_hash))
+                    verity::build_kernel_cmdline(Some(&vinfo.root_hash), false)
                 }
                 Err(e) => {
                     warn!(vm_id = %vm_id, error = %e, "dm-verity setup failed, falling back to direct mount");
-                    verity::build_kernel_cmdline(None)
+                    verity::build_kernel_cmdline(None, false)
                 }
             }
         } else {
-            verity::build_kernel_cmdline(None)
+            verity::build_kernel_cmdline(None, false)
         };
 
         // Build QEMU command

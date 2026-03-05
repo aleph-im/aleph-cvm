@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use aleph_tee::sev_snp::verify::verify_sev_snp_report;
 use aleph_tee::types::AttestationReport;
 use anyhow::{Context, Result, bail};
 use rand::Rng;
+use serde::Deserialize;
 
 use crate::verify::SnpCertVerifier;
 
@@ -20,6 +24,11 @@ pub struct AttestedResponse {
     pub body: String,
 }
 
+#[derive(Deserialize)]
+pub struct InjectSecretResponse {
+    pub injected: Vec<String>,
+}
+
 /// Build a reqwest client with our custom TLS verifier.
 fn build_attested_client(
     verifier: &Arc<SnpCertVerifier>,
@@ -34,8 +43,6 @@ fn build_attested_client(
         .build()
         .context("failed to build HTTP client with custom TLS config")
 }
-
-use std::sync::Arc;
 
 /// Layer 2: Make an API call with TLS-bound attestation verification.
 ///
@@ -145,4 +152,63 @@ pub async fn fresh_attestation(
     }
 
     Ok(report)
+}
+
+/// Inject secrets into a confidential VM via attested TLS.
+///
+/// Sends a POST request with a JSON map of key-value secrets to the
+/// `confidential/inject-secret` endpoint. The TLS channel is attested
+/// (and optionally measurement-pinned), so secrets are only ever sent
+/// to a verified TEE.
+pub async fn inject_secret(
+    base_url: &str,
+    product: &str,
+    expected_measurement: Option<&[u8]>,
+    secrets: &[(String, String)],
+) -> Result<InjectSecretResponse> {
+    let base = url::Url::parse(base_url).context("failed to parse base URL")?;
+    let inject_url = base
+        .join("confidential/inject-secret")
+        .context("failed to construct inject-secret URL")?;
+
+    let verifier = SnpCertVerifier::new(expected_measurement.map(|m| m.to_vec()));
+    let client = build_attested_client(&verifier)?;
+
+    let secrets_map: HashMap<&str, &str> = secrets
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let response = client
+        .post(inject_url.as_str())
+        .json(&secrets_map)
+        .send()
+        .await
+        .context("failed to send inject-secret request")?;
+
+    // Verify attestation after TLS handshake.
+    let report = verifier
+        .get_report()
+        .context("no attestation report extracted from TLS handshake")?;
+    let result = verify_sev_snp_report(&report, product)
+        .await
+        .context("SEV-SNP report verification failed")?;
+    if !result.valid {
+        bail!("attestation invalid: {}", result.summary);
+    }
+
+    let status = response.status().as_u16();
+    if status == 409 {
+        bail!("secrets already injected (409 Conflict)");
+    }
+    if status != 200 {
+        let body = response.text().await.unwrap_or_default();
+        bail!("inject-secret failed with status {status}: {body}");
+    }
+
+    let resp: InjectSecretResponse = response
+        .json()
+        .await
+        .context("failed to parse inject-secret response")?;
+    Ok(resp)
 }

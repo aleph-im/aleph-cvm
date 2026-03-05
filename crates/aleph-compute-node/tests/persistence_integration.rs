@@ -27,6 +27,7 @@ fn test_persistence_roundtrip_multiple_vms() {
                     backend: TeeType::SevSnp,
                     policy: Some("0x30000".to_string()),
                 },
+                encrypted: false,
             },
             ip: Ipv4Addr::new(10, 0, 100, i + 1),
             ipv6: None,

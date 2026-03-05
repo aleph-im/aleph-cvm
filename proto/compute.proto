@@ -24,6 +24,8 @@ message CreateVmRequest {
   TeeConfig tee = 7;
   string ipv6_address = 8;      // requested IPv6 (empty = random from pool)
   uint32 ipv6_prefix_len = 9;   // requested prefix length (0 = /128)
+  // true = LUKS encrypted rootfs (skip dm-verity, user injects key via attest-agent)
+  bool encrypted = 10;
 }
 
 message DiskConfig {

@@ -2,18 +2,21 @@ mod client;
 mod verify;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "aleph-attest-cli", about = "Client-side TEE attestation verifier")]
 struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// Common arguments shared by all subcommands.
+#[derive(Parser)]
+struct CommonArgs {
     /// URL to connect to
     #[arg(long)]
     url: String,
-
-    /// Request fresh attestation with a random nonce (Layer 3)
-    #[arg(long)]
-    fresh_attest: bool,
 
     /// AMD product name for certificate chain validation
     #[arg(long, default_value = "Genoa")]
@@ -27,6 +30,41 @@ struct Cli {
     expected_measurement: Option<String>,
 }
 
+impl CommonArgs {
+    fn parse_expected_measurement(&self) -> Result<Option<Vec<u8>>> {
+        self.expected_measurement
+            .as_deref()
+            .map(|hex_str| hex::decode(hex_str).context("invalid hex in --expected-measurement"))
+            .transpose()
+    }
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Make an API call with TLS-bound attestation verification (Layer 2)
+    Attest(CommonArgs),
+
+    /// Request fresh attestation with a random nonce (Layer 3)
+    FreshAttest(CommonArgs),
+
+    /// Inject secrets into a confidential VM via attested TLS
+    InjectSecret {
+        #[command(flatten)]
+        common: CommonArgs,
+
+        /// Secret to inject as key=value (can be repeated)
+        #[arg(long = "secret", value_parser = parse_key_value)]
+        secrets: Vec<(String, String)>,
+    },
+}
+
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid key=value pair: no '=' found in '{s}'"))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     rustls::crypto::ring::default_provider()
@@ -36,44 +74,63 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let expected_measurement = cli
-        .expected_measurement
-        .as_deref()
-        .map(|hex_str| hex::decode(hex_str).context("invalid hex in --expected-measurement"))
-        .transpose()?;
+    match cli.command {
+        Command::Attest(args) => {
+            let expected = args.parse_expected_measurement()?;
+            println!("Making attested request to {}...", args.url);
 
-    if cli.fresh_attest {
-        // Layer 3: Fresh attestation with random nonce
-        println!("Requesting fresh attestation from {}...", cli.url);
+            let response = client::attested_request(
+                &args.url,
+                &args.amd_product,
+                expected.as_deref(),
+            )
+            .await?;
 
-        let report = client::fresh_attestation(
-            &cli.url,
-            &cli.amd_product,
-            expected_measurement.as_deref(),
-        )
-        .await?;
+            println!("Attestation valid: {}", response.attestation_valid);
+            println!("Summary:           {}", response.attestation_summary);
+            println!("Measurement:       {}", hex::encode(&response.measurement));
+            println!("HTTP status:       {}", response.status);
+            println!("Response body:");
+            println!("{}", response.body);
+        }
+        Command::FreshAttest(args) => {
+            let expected = args.parse_expected_measurement()?;
+            println!("Requesting fresh attestation from {}...", args.url);
 
-        println!("Fresh attestation verified successfully!");
-        println!("  TEE type:     {:?}", report.tee_type);
-        println!("  Measurement:  {}", hex::encode(&report.measurement));
-        println!("  Report data:  {}", hex::encode(report.report_data));
-    } else {
-        // Layer 2: TLS-bound attestation verification
-        println!("Making attested request to {}...", cli.url);
+            let report = client::fresh_attestation(
+                &args.url,
+                &args.amd_product,
+                expected.as_deref(),
+            )
+            .await?;
 
-        let response = client::attested_request(
-            &cli.url,
-            &cli.amd_product,
-            expected_measurement.as_deref(),
-        )
-        .await?;
+            println!("Fresh attestation verified successfully!");
+            println!("  TEE type:     {:?}", report.tee_type);
+            println!("  Measurement:  {}", hex::encode(&report.measurement));
+            println!("  Report data:  {}", hex::encode(report.report_data));
+        }
+        Command::InjectSecret { common, secrets } => {
+            let expected = common.parse_expected_measurement()?;
 
-        println!("Attestation valid: {}", response.attestation_valid);
-        println!("Summary:           {}", response.attestation_summary);
-        println!("Measurement:       {}", hex::encode(&response.measurement));
-        println!("HTTP status:       {}", response.status);
-        println!("Response body:");
-        println!("{}", response.body);
+            if secrets.is_empty() {
+                anyhow::bail!("at least one --secret key=value is required");
+            }
+
+            println!("Injecting {} secret(s) into {}...", secrets.len(), common.url);
+
+            let resp = client::inject_secret(
+                &common.url,
+                &common.amd_product,
+                expected.as_deref(),
+                &secrets,
+            )
+            .await?;
+
+            println!("Secrets injected successfully!");
+            for key in &resp.injected {
+                println!("  - {}", key);
+            }
+        }
     }
 
     Ok(())
