@@ -66,15 +66,6 @@ fi
 ARTIFACTS_DIR="$(realpath "$1")"
 shift
 
-# PrivateTmp=true in the systemd unit gives QEMU its own /tmp, so artifacts
-# under /tmp would be invisible to the VM process.
-if [[ "$ARTIFACTS_DIR" == /tmp/* ]]; then
-    fail "Artifacts directory is under /tmp — QEMU runs with PrivateTmp=true"
-    fail "and cannot access files there. Use a persistent path instead"
-    fail "(e.g. /var/lib/aleph-cvm/demo)."
-    exit 1
-fi
-
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --amd-product)

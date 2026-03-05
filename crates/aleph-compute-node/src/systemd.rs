@@ -36,10 +36,7 @@ pub fn start_vm_unit(vm_id: &str, qemu_args: &[String], run_dir: &std::path::Pat
         "--property", "StandardOutput=journal",
         "--property", "StandardError=journal",
         // Sandboxing — restrict QEMU's capabilities and filesystem access.
-        // PrivateTmp gives QEMU its own /tmp, preventing access to host /tmp.
-        // VM artifacts (kernel, initrd, disk images) MUST NOT live under /tmp.
         "--property", "NoNewPrivileges=true",
-        "--property", "PrivateTmp=true",
         "--property", "ProtectSystem=strict",
         "--property", &rw_paths,
         "--property", "ProtectHome=true",
