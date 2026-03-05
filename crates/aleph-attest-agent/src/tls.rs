@@ -6,6 +6,7 @@ use aleph_tee::x509::{encode_attestation_extension, ATTESTATION_OID};
 use anyhow::{Context, Result};
 use rcgen::{CertificateParams, CustomExtension, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use zeroize::Zeroizing;
 
 use crate::attestation::get_key_bound_report;
 
@@ -14,8 +15,8 @@ use crate::attestation::get_key_bound_report;
 pub struct AttestedTlsIdentity {
     /// DER-encoded self-signed certificate containing the attestation extension.
     pub cert_der: Vec<u8>,
-    /// DER-encoded PKCS#8 private key.
-    pub key_der: Vec<u8>,
+    /// DER-encoded PKCS#8 private key (zeroized on drop).
+    pub key_der: Zeroizing<Vec<u8>>,
     /// The attestation report that was embedded in the certificate.
     /// Retained for programmatic access (e.g. logging, diagnostics).
     #[allow(dead_code)]
@@ -54,7 +55,7 @@ pub fn generate_attested_tls_identity(backend: &dyn TeeBackend) -> Result<Attest
         .context("failed to create self-signed certificate")?;
 
     let cert_der = cert.der().to_vec();
-    let key_der = key_pair.serialize_der();
+    let key_der = Zeroizing::new(key_pair.serialize_der());
 
     Ok(AttestedTlsIdentity {
         cert_der,
@@ -71,7 +72,7 @@ pub fn generate_attested_tls_identity(backend: &dyn TeeBackend) -> Result<Attest
 pub fn build_rustls_config(identity: &AttestedTlsIdentity) -> Result<rustls::ServerConfig> {
     let cert_chain = vec![CertificateDer::from(identity.cert_der.clone())];
     let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from((*identity.key_der).clone()));
 
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),

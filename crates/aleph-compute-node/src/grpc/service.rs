@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -94,6 +95,8 @@ impl ComputeNodeServer {
         }
 
         let uds = UnixListener::bind(socket_path)?;
+        // Restrict gRPC socket to owner-only (0600).
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
         let uds_stream = UnixListenerStream::new(uds);
 
         info!(socket = %socket_path.display(), "gRPC server listening");
