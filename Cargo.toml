@@ -88,6 +88,9 @@ hmac = "0.12"
 # Random
 rand = "0.9"
 
+# Secret hygiene
+zeroize = { version = "1", features = ["derive"] }
+
 # Testing
 tokio-test = "0.4"
 tempfile = "3"
