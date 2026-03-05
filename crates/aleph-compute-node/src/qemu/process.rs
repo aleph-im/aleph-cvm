@@ -1,3 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
 use anyhow::{Context, Result};
 use tracing::info;
 
@@ -32,6 +34,9 @@ impl QemuProcess {
             .context("qmp_socket path has no parent")?;
         std::fs::create_dir_all(vm_dir)
             .with_context(|| format!("failed to create VM runtime dir: {}", vm_dir.display()))?;
+        // Restrict QMP socket directory to owner-only (0700).
+        std::fs::set_permissions(vm_dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to set permissions on {}", vm_dir.display()))?;
 
         // Clean up any leftover failed unit from a previous run
         systemd::reset_failed_unit(&vm_id);
