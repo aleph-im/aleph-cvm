@@ -83,14 +83,24 @@ pub fn build_qemu_command(
 
     // Disk drives
     for disk in &config.disks {
+        // Validate format against allowlist to prevent parameter injection via commas.
+        let format = match disk.format.as_str() {
+            "raw" | "qcow2" => &disk.format,
+            other => panic!("unsupported disk format: {other} (allowed: raw, qcow2)"),
+        };
+
+        // Reject paths containing commas (QEMU option separator).
+        let path_str = disk.path.display().to_string();
+        assert!(
+            !path_str.contains(','),
+            "disk path must not contain commas: {path_str}"
+        );
+
         let ro = if disk.readonly { "on" } else { "off" };
         args.extend([
             "-drive".into(),
             format!(
-                "file={},format={},if=virtio,readonly={}",
-                disk.path.display(),
-                disk.format,
-                ro,
+                "file={path_str},format={format},if=virtio,readonly={ro}",
             ),
         ]);
     }
