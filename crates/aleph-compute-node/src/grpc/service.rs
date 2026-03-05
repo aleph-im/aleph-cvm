@@ -19,6 +19,59 @@ use aleph_tee::types::{DiskConfig, TeeConfig, TeeType, VmConfig};
 
 use crate::vm::VmManager;
 
+/// Maximum VM ID length. Linux TAP interface names are limited to 15 chars
+/// (IFNAMSIZ - 1), and we prefix with "tap-" (4 chars), leaving 11 for the ID.
+const MAX_VM_ID_LEN: usize = 11;
+
+/// Validate a VM ID: must be 1-11 chars, lowercase alphanumeric and hyphens,
+/// must start with a letter or digit, must not start/end with hyphen.
+fn validate_vm_id(vm_id: &str) -> Result<(), Status> {
+    if vm_id.is_empty() {
+        return Err(Status::invalid_argument("vm_id must not be empty"));
+    }
+    if vm_id.len() > MAX_VM_ID_LEN {
+        return Err(Status::invalid_argument(format!(
+            "vm_id too long: max {MAX_VM_ID_LEN} chars (TAP name limit), got {}",
+            vm_id.len()
+        )));
+    }
+    if !vm_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err(Status::invalid_argument(
+            "vm_id must contain only lowercase alphanumeric characters and hyphens",
+        ));
+    }
+    if vm_id.starts_with('-') || vm_id.ends_with('-') {
+        return Err(Status::invalid_argument("vm_id must not start or end with a hyphen"));
+    }
+    Ok(())
+}
+
+/// Validate that a file path exists and is an absolute path.
+fn validate_file_path(path: &str, field_name: &str) -> Result<(), Status> {
+    if path.is_empty() {
+        return Err(Status::invalid_argument(format!("{field_name} must not be empty")));
+    }
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err(Status::invalid_argument(format!("{field_name} must be an absolute path")));
+    }
+    if !p.exists() {
+        return Err(Status::invalid_argument(format!("{field_name} does not exist: {path}")));
+    }
+    Ok(())
+}
+
+/// Validate VM resource configuration.
+fn validate_vm_resources(vcpus: u32, memory_mb: u32) -> Result<(), Status> {
+    if vcpus == 0 {
+        return Err(Status::invalid_argument("vcpus must be > 0"));
+    }
+    if memory_mb == 0 {
+        return Err(Status::invalid_argument("memory_mb must be > 0"));
+    }
+    Ok(())
+}
+
 /// gRPC server wrapping the VmManager.
 pub struct ComputeNodeServer {
     manager: Arc<VmManager>,
@@ -117,6 +170,16 @@ impl ComputeNode for ComputeNodeService {
         request: Request<CreateVmRequest>,
     ) -> Result<Response<VmInfo>, Status> {
         let req = request.into_inner();
+
+        // Validate inputs
+        validate_vm_id(&req.vm_id)?;
+        validate_file_path(&req.kernel, "kernel")?;
+        validate_file_path(&req.initrd, "initrd")?;
+        validate_vm_resources(req.vcpus, req.memory_mb)?;
+
+        for d in &req.disks {
+            validate_file_path(&d.path, "disk path")?;
+        }
 
         let tee = parse_tee_config(req.tee)?;
 
