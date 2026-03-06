@@ -227,33 +227,32 @@ impl NftablesManager {
         ));
 
         // IPv6 forwarding for this VM
-        if self.ipv6_enabled {
-            if let Some(ip6_filter_table) =
+        if self.ipv6_enabled
+            && let Some(ip6_filter_table) =
                 get_table_for_chain(&ruleset, "ip6", &self.supervisor_filter_chain())
-            {
-                let vm_filter6 = self.vm_filter_chain(vm_id);
-                commands.extend(chains::add_chain_if_not_present(
-                    &ruleset,
-                    "ip6",
-                    &ip6_filter_table,
-                    &vm_filter6,
-                ));
-                commands.extend(rules::add_jump_if_not_present(
-                    &ruleset,
-                    "ip6",
-                    &ip6_filter_table,
-                    &self.supervisor_filter_chain(),
-                    &vm_filter6,
-                ));
-                commands.extend(rules::add_forward_accept_if_not_present(
-                    &ruleset,
-                    "ip6",
-                    &ip6_filter_table,
-                    &vm_filter6,
-                    tap_device,
-                    &self.external_interface,
-                ));
-            }
+        {
+            let vm_filter6 = self.vm_filter_chain(vm_id);
+            commands.extend(chains::add_chain_if_not_present(
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
+                &vm_filter6,
+            ));
+            commands.extend(rules::add_jump_if_not_present(
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
+                &self.supervisor_filter_chain(),
+                &vm_filter6,
+            ));
+            commands.extend(rules::add_forward_accept_if_not_present(
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
+                &vm_filter6,
+                tap_device,
+                &self.external_interface,
+            ));
         }
 
         if !commands.is_empty() {
@@ -291,27 +290,24 @@ impl NftablesManager {
         let filter_table = get_table_for_chain(&ruleset, "ip", &self.vm_filter_chain(vm_id))
             .context("VM filter chain not found — set up VM first")?;
 
-        let mut commands = Vec::new();
-
-        // DNAT rule in supervisor-prerouting
-        commands.push(rules::dnat_rule(
-            "ip",
-            &prerouting_table,
-            &self.supervisor_prerouting_chain(),
-            host_port,
-            &guest_ip.to_string(),
-            vm_port,
-            protocol,
-        ));
-
-        // Accept rule in vm-filter chain
-        commands.push(rules::port_accept_rule(
-            "ip",
-            &filter_table,
-            &self.vm_filter_chain(vm_id),
-            vm_port,
-            protocol,
-        ));
+        let commands = vec![
+            rules::dnat_rule(
+                "ip",
+                &prerouting_table,
+                &self.supervisor_prerouting_chain(),
+                host_port,
+                &guest_ip.to_string(),
+                vm_port,
+                protocol,
+            ),
+            rules::port_accept_rule(
+                "ip",
+                &filter_table,
+                &self.vm_filter_chain(vm_id),
+                vm_port,
+                protocol,
+            ),
+        ];
 
         execute_nft_commands(&commands)?;
 
@@ -334,27 +330,26 @@ impl NftablesManager {
 
         // Find and delete the DNAT rule in supervisor-prerouting
         for entry in &ruleset {
-            if let Some(rule) = entry.get("rule") {
-                if rules::is_dnat_rule_matching(
+            if let Some(rule) = entry.get("rule")
+                && rules::is_dnat_rule_matching(
                     rule,
                     &self.supervisor_prerouting_chain(),
                     host_port,
                     vm_port,
                     protocol,
-                ) {
-                    if let Some(handle) = rule.get("handle") {
-                        let table = rule["table"].as_str().unwrap_or("");
-                        let family = rule["family"].as_str().unwrap_or("ip");
-                        commands.push(serde_json::json!({
-                            "delete": {"rule": {
-                                "family": family,
-                                "table": table,
-                                "chain": self.supervisor_prerouting_chain(),
-                                "handle": handle,
-                            }}
-                        }));
-                    }
-                }
+                )
+                && let Some(handle) = rule.get("handle")
+            {
+                let table = rule["table"].as_str().unwrap_or("");
+                let family = rule["family"].as_str().unwrap_or("ip");
+                commands.push(serde_json::json!({
+                    "delete": {"rule": {
+                        "family": family,
+                        "table": table,
+                        "chain": self.supervisor_prerouting_chain(),
+                        "handle": handle,
+                    }}
+                }));
             }
         }
 
@@ -383,39 +378,38 @@ impl NftablesManager {
 
         // Find all jump rules targeting this chain and delete them (by handle)
         for entry in &ruleset {
-            if let Some(rule) = entry.get("rule") {
-                if rules::rule_jumps_to(rule, chain_name) {
-                    if let Some(handle) = rule.get("handle") {
-                        let family = rule["family"].as_str().unwrap_or("ip");
-                        let table = rule["table"].as_str().unwrap_or("");
-                        let chain = rule["chain"].as_str().unwrap_or("");
-                        commands.push(serde_json::json!({
-                            "delete": {"rule": {
-                                "family": family,
-                                "table": table,
-                                "chain": chain,
-                                "handle": handle,
-                            }}
-                        }));
-                    }
-                }
+            if let Some(rule) = entry.get("rule")
+                && rules::rule_jumps_to(rule, chain_name)
+                && let Some(handle) = rule.get("handle")
+            {
+                let family = rule["family"].as_str().unwrap_or("ip");
+                let table = rule["table"].as_str().unwrap_or("");
+                let chain = rule["chain"].as_str().unwrap_or("");
+                commands.push(serde_json::json!({
+                    "delete": {"rule": {
+                        "family": family,
+                        "table": table,
+                        "chain": chain,
+                        "handle": handle,
+                    }}
+                }));
             }
         }
 
         // Delete the chains themselves
         for entry in &ruleset {
-            if let Some(chain) = entry.get("chain") {
-                if chain.get("name").and_then(|n| n.as_str()) == Some(chain_name) {
-                    let family = chain["family"].as_str().unwrap_or("ip");
-                    let table = chain["table"].as_str().unwrap_or("");
-                    commands.push(serde_json::json!({
-                        "delete": {"chain": {
-                            "family": family,
-                            "table": table,
-                            "name": chain_name,
-                        }}
-                    }));
-                }
+            if let Some(chain) = entry.get("chain")
+                && chain.get("name").and_then(|n| n.as_str()) == Some(chain_name)
+            {
+                let family = chain["family"].as_str().unwrap_or("ip");
+                let table = chain["table"].as_str().unwrap_or("");
+                commands.push(serde_json::json!({
+                    "delete": {"chain": {
+                        "family": family,
+                        "table": table,
+                        "name": chain_name,
+                    }}
+                }));
             }
         }
 
@@ -435,15 +429,13 @@ impl NftablesManager {
         hook: &str,
     ) -> String {
         for entry in ruleset {
-            if let Some(chain) = entry.get("chain") {
-                if chain.get("family").and_then(|f| f.as_str()) == Some(family)
-                    && chain.get("table").and_then(|t| t.as_str()) == Some(table)
-                    && chain.get("hook").and_then(|h| h.as_str()) == Some(hook)
-                {
-                    if let Some(name) = chain.get("name").and_then(|n| n.as_str()) {
-                        return name.to_string();
-                    }
-                }
+            if let Some(chain) = entry.get("chain")
+                && chain.get("family").and_then(|f| f.as_str()) == Some(family)
+                && chain.get("table").and_then(|t| t.as_str()) == Some(table)
+                && chain.get("hook").and_then(|h| h.as_str()) == Some(hook)
+                && let Some(name) = chain.get("name").and_then(|n| n.as_str())
+            {
+                return name.to_string();
             }
         }
         // Fallback to the hook name itself (common convention)
@@ -465,10 +457,10 @@ fn execute_list_ruleset() -> Result<Vec<Value>> {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(parsed) = serde_json::from_str::<Value>(&stdout) {
-                if let Some(entries) = parsed.get("nftables").and_then(|n| n.as_array()) {
-                    all_entries.extend(entries.iter().cloned());
-                }
+            if let Ok(parsed) = serde_json::from_str::<Value>(&stdout)
+                && let Some(entries) = parsed.get("nftables").and_then(|n| n.as_array())
+            {
+                all_entries.extend(entries.iter().cloned());
             }
         }
     }
@@ -515,14 +507,12 @@ fn execute_nft_commands(commands: &[Value]) -> Result<()> {
 fn find_or_create_table_for_hook(ruleset: &[Value], hook: &str, family: &str) -> Result<String> {
     // Search for an existing base chain with this hook
     for entry in ruleset {
-        if let Some(chain) = entry.get("chain") {
-            if chain.get("family").and_then(|f| f.as_str()) == Some(family)
-                && chain.get("hook").and_then(|h| h.as_str()) == Some(hook)
-            {
-                if let Some(table) = chain.get("table").and_then(|t| t.as_str()) {
-                    return Ok(table.to_string());
-                }
-            }
+        if let Some(chain) = entry.get("chain")
+            && chain.get("family").and_then(|f| f.as_str()) == Some(family)
+            && chain.get("hook").and_then(|h| h.as_str()) == Some(hook)
+            && let Some(table) = chain.get("table").and_then(|t| t.as_str())
+        {
+            return Ok(table.to_string());
         }
     }
 
@@ -567,15 +557,14 @@ fn find_or_create_table_for_hook(ruleset: &[Value], hook: &str, family: &str) ->
 /// Find the table that contains a given chain name.
 fn get_table_for_chain(ruleset: &[Value], family: &str, chain_name: &str) -> Option<String> {
     for entry in ruleset {
-        if let Some(chain) = entry.get("chain") {
-            if chain.get("family").and_then(|f| f.as_str()) == Some(family)
-                && chain.get("name").and_then(|n| n.as_str()) == Some(chain_name)
-            {
-                return chain
-                    .get("table")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_string());
-            }
+        if let Some(chain) = entry.get("chain")
+            && chain.get("family").and_then(|f| f.as_str()) == Some(family)
+            && chain.get("name").and_then(|n| n.as_str()) == Some(chain_name)
+        {
+            return chain
+                .get("table")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
         }
     }
     None

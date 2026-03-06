@@ -89,11 +89,10 @@ pub async fn fetch_vcek(product: &str, chip_id: &[u8; 64], tcb: &TcbParams) -> R
             tcb.bl_spl, tcb.tee_spl, tcb.snp_spl, tcb.ucode_spl
         ))
     });
-    if let Some(ref path) = cache_path {
-        if let Some(data) = read_cached(path) {
+    if let Some(ref path) = cache_path
+        && let Some(data) = read_cached(path) {
             return Ok(data);
         }
-    }
 
     let url = format!(
         "{KDS_BASE_URL}/{product}/{chip_id_hex}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
@@ -135,11 +134,10 @@ pub async fn fetch_ca_chain(product: &str) -> Result<(Vec<u8>, Vec<u8>)> {
         let dir = d.join(product);
         (dir.join("ask.der"), dir.join("ark.der"))
     });
-    if let Some((ref ask_path, ref ark_path)) = cache_paths {
-        if let (Some(ask), Some(ark)) = (read_cached(ask_path), read_cached(ark_path)) {
+    if let Some((ref ask_path, ref ark_path)) = cache_paths
+        && let (Some(ask), Some(ark)) = (read_cached(ask_path), read_cached(ark_path)) {
             return Ok((ask, ark));
         }
-    }
 
     let url = format!("{KDS_BASE_URL}/{product}/cert_chain");
 
