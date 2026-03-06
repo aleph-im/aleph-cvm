@@ -160,11 +160,15 @@ pub fn add_forward_accept_if_not_present(
 }
 
 /// Build a DNAT rule for port forwarding.
+///
+/// No `iifname` match — the rule applies to traffic from any interface
+/// (external, bridge, loopback). The host port is unique per forward,
+/// so there's no ambiguity. This allows testing from the host itself
+/// and forwarding from both external and bridge-originated traffic.
 pub fn dnat_rule(
     family: &str,
     table: &str,
     chain: &str,
-    iifname: &str,
     host_port: u16,
     dest_ip: &str,
     dest_port: u16,
@@ -176,11 +180,6 @@ pub fn dnat_rule(
             "table": table,
             "chain": chain,
             "expr": [
-                {"match": {
-                    "op": "==",
-                    "left": {"meta": {"key": "iifname"}},
-                    "right": iifname,
-                }},
                 {"match": {
                     "op": "==",
                     "left": {"payload": {"protocol": protocol.to_string(), "field": "dport"}},
@@ -196,11 +195,14 @@ pub fn dnat_rule(
 }
 
 /// Build an accept rule for port forwarding (in the VM's filter chain).
+/// Build an accept rule for a forwarded port in the VM's filter chain.
+///
+/// No `iifname` match — accepts forwarded traffic from any interface,
+/// consistent with the DNAT rule.
 pub fn port_accept_rule(
     family: &str,
     table: &str,
     chain: &str,
-    iifname: &str,
     port: u16,
     protocol: Protocol,
 ) -> Value {
@@ -210,11 +212,6 @@ pub fn port_accept_rule(
             "table": table,
             "chain": chain,
             "expr": [
-                {"match": {
-                    "op": "==",
-                    "left": {"meta": {"key": "iifname"}},
-                    "right": iifname,
-                }},
                 {"match": {
                     "op": "==",
                     "left": {"payload": {"protocol": protocol.to_string(), "field": "dport"}},
@@ -431,11 +428,6 @@ mod tests {
         let rule = json!({
             "chain": "aleph-supervisor-prerouting",
             "expr": [
-                {"match": {
-                    "op": "==",
-                    "left": {"meta": {"key": "iifname"}},
-                    "right": "eth0",
-                }},
                 {"match": {
                     "op": "==",
                     "left": {"payload": {"protocol": "tcp", "field": "dport"}},

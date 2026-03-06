@@ -234,7 +234,6 @@ impl NftablesManager {
             "ip",
             &prerouting_table,
             &self.supervisor_prerouting_chain(),
-            &self.external_interface,
             host_port,
             &guest_ip.to_string(),
             vm_port,
@@ -246,7 +245,6 @@ impl NftablesManager {
             "ip",
             &filter_table,
             &self.vm_filter_chain(vm_id),
-            &self.external_interface,
             vm_port,
             protocol,
         ));
