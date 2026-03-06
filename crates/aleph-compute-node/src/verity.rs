@@ -27,17 +27,18 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
         let cache_mtime = roothash_path.metadata().and_then(|m| m.modified()).ok();
 
         if let (Some(rootfs_t), Some(cache_t)) = (rootfs_mtime, cache_mtime)
-            && cache_t >= rootfs_t {
-                let root_hash = std::fs::read_to_string(&roothash_path)
-                    .context("failed to read cached roothash")?
-                    .trim()
-                    .to_string();
-                info!(rootfs = %rootfs_path.display(), root_hash = %root_hash, "using cached verity artifacts");
-                return Ok(VerityInfo {
-                    root_hash,
-                    hashtree_path,
-                });
-            }
+            && cache_t >= rootfs_t
+        {
+            let root_hash = std::fs::read_to_string(&roothash_path)
+                .context("failed to read cached roothash")?
+                .trim()
+                .to_string();
+            info!(rootfs = %rootfs_path.display(), root_hash = %root_hash, "using cached verity artifacts");
+            return Ok(VerityInfo {
+                root_hash,
+                hashtree_path,
+            });
+        }
     }
 
     // Compute verity hash tree

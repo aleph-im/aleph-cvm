@@ -187,13 +187,13 @@ impl VmManager {
             if let Some(ref ipv6) = vm_ipv6
                 && let Err(e) =
                     network::write_dhcpv6_reservation(hostsdir, &vm_id, &mac_addr, ipv6.addr())
-                {
-                    network::remove_dhcp_reservation(hostsdir, &vm_id);
-                    if let Some(ref alloc) = self.ipv6_allocator {
-                        alloc.lock().await.release(&vm_id);
-                    }
-                    return Err(anyhow::anyhow!(e).context("failed to write DHCPv6 reservation"));
+            {
+                network::remove_dhcp_reservation(hostsdir, &vm_id);
+                if let Some(ref alloc) = self.ipv6_allocator {
+                    alloc.lock().await.release(&vm_id);
                 }
+                return Err(anyhow::anyhow!(e).context("failed to write DHCPv6 reservation"));
+            }
         }
 
         // Create TAP interface
@@ -206,12 +206,13 @@ impl VmManager {
 
         // Add IPv6 address to TAP interface
         if let Some(ref ipv6) = vm_ipv6
-            && let Err(e) = network::add_ipv6_to_tap(&tap_name, *ipv6).await {
-                error!(vm_id = %vm_id, error = %e, "failed to add IPv6 to TAP");
-                let _ = network::delete_tap(&tap_name).await;
-                self.cleanup_reservations(&vm_id, true);
-                return Err(e);
-            }
+            && let Err(e) = network::add_ipv6_to_tap(&tap_name, *ipv6).await
+        {
+            error!(vm_id = %vm_id, error = %e, "failed to add IPv6 to TAP");
+            let _ = network::delete_tap(&tap_name).await;
+            self.cleanup_reservations(&vm_id, true);
+            return Err(e);
+        }
 
         // Set up nftables per-VM chains (NAT + filter)
         if let Err(e) = self.nftables.setup_vm(&vm_id, &tap_name) {
@@ -332,13 +333,12 @@ impl VmManager {
                 network::remove_dhcpv6_reservation(hostsdir, vm_id);
             }
         }
-        if has_ipv6
-            && let Some(ref alloc) = self.ipv6_allocator {
-                // Best-effort release; can't await in sync context, so use try_lock
-                if let Ok(mut alloc) = alloc.try_lock() {
-                    alloc.release(vm_id);
-                }
+        if has_ipv6 && let Some(ref alloc) = self.ipv6_allocator {
+            // Best-effort release; can't await in sync context, so use try_lock
+            if let Ok(mut alloc) = alloc.try_lock() {
+                alloc.release(vm_id);
             }
+        }
     }
 
     /// Get information about a specific VM.
@@ -378,9 +378,10 @@ impl VmManager {
 
         // Release IPv6 allocation
         if handle.ipv6.is_some()
-            && let Some(ref alloc) = self.ipv6_allocator {
-                alloc.lock().await.release(id);
-            }
+            && let Some(ref alloc) = self.ipv6_allocator
+        {
+            alloc.lock().await.release(id);
+        }
 
         // Tear down nftables chains for this VM
         let _ = self.nftables.teardown_vm(id);
@@ -508,12 +509,13 @@ impl VmManager {
     async fn update_persisted_port_forwards(&self, vm_id: &str) {
         let path = self.state_dir.join(format!("{vm_id}.json"));
         if let Ok(json) = std::fs::read_to_string(&path)
-            && let Ok(mut persisted) = serde_json::from_str::<PersistedVm>(&json) {
-                let pf = self.port_forwards.lock().await;
-                persisted.port_forwards = pf.list_for_vm(vm_id).into_iter().cloned().collect();
-                drop(pf);
-                let _ = persistence::save_vm(&self.state_dir, vm_id, &persisted);
-            }
+            && let Ok(mut persisted) = serde_json::from_str::<PersistedVm>(&json)
+        {
+            let pf = self.port_forwards.lock().await;
+            persisted.port_forwards = pf.list_for_vm(vm_id).into_iter().cloned().collect();
+            drop(pf);
+            let _ = persistence::save_vm(&self.state_dir, vm_id, &persisted);
+        }
     }
 
     /// Recover VMs from persisted state on startup.
@@ -551,10 +553,11 @@ impl VmManager {
 
             // Re-register IPv6 allocation if applicable
             if let Some(ref ipv6) = pvm.ipv6
-                && let Some(ref alloc) = self.ipv6_allocator {
-                    let mut alloc = alloc.lock().await;
-                    let _ = alloc.allocate(&vm_id, Some(*ipv6));
-                }
+                && let Some(ref alloc) = self.ipv6_allocator
+            {
+                let mut alloc = alloc.lock().await;
+                let _ = alloc.allocate(&vm_id, Some(*ipv6));
+            }
 
             // Restore port forwards into in-memory state
             {
