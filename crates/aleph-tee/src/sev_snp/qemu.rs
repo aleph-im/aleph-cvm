@@ -5,7 +5,7 @@ use crate::types::VmConfig;
 /// 0x30000 enables SEV-SNP with SMT allowed and debug disabled.
 const DEFAULT_POLICY: &str = "0x30000";
 
-/// Default OVMF firmware path (AMD's SEV-SNP fork, installed by build-ovmf.sh).
+/// Default OVMF firmware path (AMD SEV-SNP variant, built by nix/ovmf.nix).
 pub const DEFAULT_OVMF_PATH: &str = "/usr/local/share/ovmf-snp/OVMF.fd";
 
 /// Generate QEMU command-line arguments for launching an SEV-SNP confidential VM.
