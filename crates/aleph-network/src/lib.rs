@@ -3,8 +3,4 @@ pub mod ipv4;
 pub mod ipv6;
 pub mod ndp_proxy;
 pub mod nftables;
-pub mod tap;
 pub mod types;
-
-mod manager;
-pub use manager::NetworkManager;

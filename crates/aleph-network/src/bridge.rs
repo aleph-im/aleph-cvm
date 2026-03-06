@@ -24,7 +24,7 @@ pub async fn ensure_bridge(bridge: &str, ip: Ipv4Addr, prefix_len: u8) -> Result
 }
 
 /// Run an `ip` command and return an error if it fails.
-async fn run_ip(args: &[&str]) -> Result<()> {
+pub async fn run_ip(args: &[&str]) -> Result<()> {
     let output = tokio::process::Command::new("ip")
         .args(args)
         .output()
