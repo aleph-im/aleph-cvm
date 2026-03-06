@@ -7,7 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Dwarnings
 
 jobs:
   fmt:
@@ -42,7 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
-      - run: cargo build --workspace --all-targets
+      - run: RUSTFLAGS="-D warnings" cargo build --workspace --all-targets
 
   test:
     name: Test
