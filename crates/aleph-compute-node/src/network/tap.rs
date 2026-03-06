@@ -26,12 +26,7 @@ pub fn mac_for_vm_ip(ip: Ipv4Addr) -> String {
 ///
 /// dnsmasq with `--dhcp-hostsdir` watches the directory via inotify
 /// and picks up new files automatically (no SIGHUP needed).
-pub fn write_dhcp_reservation(
-    hostsdir: &Path,
-    vm_id: &str,
-    mac: &str,
-    ip: Ipv4Addr,
-) -> Result<()> {
+pub fn write_dhcp_reservation(hostsdir: &Path, vm_id: &str, mac: &str, ip: Ipv4Addr) -> Result<()> {
     let path = hostsdir.join(vm_id);
     let content = format!("{mac},{ip}\n");
     std::fs::write(&path, &content)

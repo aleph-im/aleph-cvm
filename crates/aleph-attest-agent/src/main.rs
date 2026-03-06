@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
 
-use proxy::{attestation_endpoint, proxy_handler, AppState};
+use proxy::{AppState, attestation_endpoint, proxy_handler};
 use secrets::inject_secret_handler;
 use tls::{build_rustls_config, generate_attested_tls_identity};
 
@@ -57,8 +57,7 @@ async fn main() -> Result<()> {
     info!("generated attested TLS identity");
 
     // 4. Build rustls config.
-    let rustls_config = build_rustls_config(&identity)
-        .context("failed to build rustls config")?;
+    let rustls_config = build_rustls_config(&identity).context("failed to build rustls config")?;
 
     // 5. Create shared application state.
     let app_state = web::Data::new(AppState {

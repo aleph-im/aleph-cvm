@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aleph_tee::traits::TeeBackend;
 use aleph_tee::types::AttestationReport;
-use aleph_tee::x509::{encode_attestation_extension, ATTESTATION_OID};
+use aleph_tee::x509::{ATTESTATION_OID, encode_attestation_extension};
 use anyhow::{Context, Result};
 use rcgen::{CertificateParams, CustomExtension, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -37,12 +37,12 @@ pub fn generate_attested_tls_identity(backend: &dyn TeeBackend) -> Result<Attest
 
     // 2. Get key-bound attestation report using the raw public key bytes.
     let public_key_bytes = key_pair.public_key_raw();
-    let report =
-        get_key_bound_report(backend, public_key_bytes).context("failed to get attestation report bound to TLS key")?;
+    let report = get_key_bound_report(backend, public_key_bytes)
+        .context("failed to get attestation report bound to TLS key")?;
 
     // 3. Encode the attestation report as a DER-encoded X.509 extension value.
-    let extension_value = encode_attestation_extension(&report)
-        .context("failed to encode attestation extension")?;
+    let extension_value =
+        encode_attestation_extension(&report).context("failed to encode attestation extension")?;
     let custom_ext = CustomExtension::from_oid_content(ATTESTATION_OID, extension_value);
 
     // 4. Create self-signed certificate.
@@ -71,8 +71,7 @@ pub fn generate_attested_tls_identity(backend: &dyn TeeBackend) -> Result<Attest
 /// providers are available in the dependency tree).
 pub fn build_rustls_config(identity: &AttestedTlsIdentity) -> Result<rustls::ServerConfig> {
     let cert_chain = vec![CertificateDer::from(identity.cert_der.clone())];
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from((*identity.key_der).clone()));
+    let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from((*identity.key_der).clone()));
 
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),

@@ -98,7 +98,6 @@ async fn test_wait_for_port_timeout() {
     use std::time::Duration;
 
     // Connect to a port that is (almost certainly) not listening
-    let result =
-        common::wait_for_port("127.0.0.1:19999", Duration::from_millis(200)).await;
+    let result = common::wait_for_port("127.0.0.1:19999", Duration::from_millis(200)).await;
     assert!(!result, "should time out when nothing is listening");
 }

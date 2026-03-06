@@ -14,7 +14,10 @@ use aleph_compute_node::network;
 use aleph_compute_node::vm::VmManager;
 
 #[derive(Parser)]
-#[command(name = "aleph-compute-node", about = "Aleph CVM Compute Node — manages confidential QEMU VMs")]
+#[command(
+    name = "aleph-compute-node",
+    about = "Aleph CVM Compute Node — manages confidential QEMU VMs"
+)]
 struct Cli {
     /// Path to the gRPC Unix domain socket.
     #[arg(long, default_value = "/run/aleph-cvm/compute.sock")]
@@ -83,8 +86,7 @@ fn detect_default_interface() -> Option<String> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -147,7 +149,9 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Initialize nftables supervisor chains
-    manager.setup_nftables().context("failed to initialize nftables")?;
+    manager
+        .setup_nftables()
+        .context("failed to initialize nftables")?;
 
     // Recover VMs from previous run
     if let Err(e) = manager.recover_vms().await {

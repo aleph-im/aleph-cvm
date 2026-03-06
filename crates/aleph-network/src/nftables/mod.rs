@@ -77,50 +77,75 @@ impl NftablesManager {
             &ruleset, "ip", &nat_table, &sup_nat,
         ));
         commands.extend(rules::add_jump_if_not_present(
-            &ruleset, "ip", &nat_table, &self.find_base_chain_name(&ruleset, "ip", &nat_table, "postrouting"),
+            &ruleset,
+            "ip",
+            &nat_table,
+            &self.find_base_chain_name(&ruleset, "ip", &nat_table, "postrouting"),
             &sup_nat,
         ));
 
         // Create supervisor-filter chain + jump from forward + conntrack rule
         let sup_filter = self.supervisor_filter_chain();
         commands.extend(chains::add_chain_if_not_present(
-            &ruleset, "ip", &filter_table, &sup_filter,
+            &ruleset,
+            "ip",
+            &filter_table,
+            &sup_filter,
         ));
         commands.extend(rules::add_jump_if_not_present(
-            &ruleset, "ip", &filter_table,
+            &ruleset,
+            "ip",
+            &filter_table,
             &self.find_base_chain_name(&ruleset, "ip", &filter_table, "forward"),
             &sup_filter,
         ));
         commands.extend(rules::add_conntrack_if_not_present(
-            &ruleset, "ip", &filter_table, &sup_filter,
+            &ruleset,
+            "ip",
+            &filter_table,
+            &sup_filter,
         ));
 
         // Create supervisor-prerouting chain + jump from prerouting
         let sup_pre = self.supervisor_prerouting_chain();
         commands.extend(chains::add_chain_if_not_present(
-            &ruleset, "ip", &prerouting_table, &sup_pre,
+            &ruleset,
+            "ip",
+            &prerouting_table,
+            &sup_pre,
         ));
         commands.extend(rules::add_jump_if_not_present(
-            &ruleset, "ip", &prerouting_table,
+            &ruleset,
+            "ip",
+            &prerouting_table,
             &self.find_base_chain_name(&ruleset, "ip", &prerouting_table, "prerouting"),
             &sup_pre,
         ));
 
         // IPv6 forwarding
         if self.ipv6_enabled {
-            let ip6_filter_table = find_or_create_table_for_hook(&execute_list_ruleset()?, "forward", "ip6")?;
+            let ip6_filter_table =
+                find_or_create_table_for_hook(&execute_list_ruleset()?, "forward", "ip6")?;
             let ruleset = execute_list_ruleset()?;
             let sup_filter6 = self.supervisor_filter_chain();
             commands.extend(chains::add_chain_if_not_present(
-                &ruleset, "ip6", &ip6_filter_table, &sup_filter6,
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
+                &sup_filter6,
             ));
             commands.extend(rules::add_jump_if_not_present(
-                &ruleset, "ip6", &ip6_filter_table,
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
                 &self.find_base_chain_name(&ruleset, "ip6", &ip6_filter_table, "forward"),
                 &sup_filter6,
             ));
             commands.extend(rules::add_conntrack_if_not_present(
-                &ruleset, "ip6", &ip6_filter_table, &sup_filter6,
+                &ruleset,
+                "ip6",
+                &ip6_filter_table,
+                &sup_filter6,
             ));
         }
 
@@ -158,37 +183,75 @@ impl NftablesManager {
 
         // Per-VM NAT chain + jump + masquerade rule
         let vm_nat = self.vm_nat_chain(vm_id);
-        commands.extend(chains::add_chain_if_not_present(&ruleset, "ip", &nat_table, &vm_nat));
+        commands.extend(chains::add_chain_if_not_present(
+            &ruleset, "ip", &nat_table, &vm_nat,
+        ));
         commands.extend(rules::add_jump_if_not_present(
-            &ruleset, "ip", &nat_table, &self.supervisor_nat_chain(), &vm_nat,
+            &ruleset,
+            "ip",
+            &nat_table,
+            &self.supervisor_nat_chain(),
+            &vm_nat,
         ));
         commands.extend(rules::add_masquerade_if_not_present(
-            &ruleset, "ip", &nat_table, &vm_nat,
-            tap_device, &self.external_interface,
+            &ruleset,
+            "ip",
+            &nat_table,
+            &vm_nat,
+            tap_device,
+            &self.external_interface,
         ));
 
         // Per-VM filter chain + jump + forward-to-external rule
         let vm_filter = self.vm_filter_chain(vm_id);
-        commands.extend(chains::add_chain_if_not_present(&ruleset, "ip", &filter_table, &vm_filter));
+        commands.extend(chains::add_chain_if_not_present(
+            &ruleset,
+            "ip",
+            &filter_table,
+            &vm_filter,
+        ));
         commands.extend(rules::add_jump_if_not_present(
-            &ruleset, "ip", &filter_table, &self.supervisor_filter_chain(), &vm_filter,
+            &ruleset,
+            "ip",
+            &filter_table,
+            &self.supervisor_filter_chain(),
+            &vm_filter,
         ));
         commands.extend(rules::add_forward_accept_if_not_present(
-            &ruleset, "ip", &filter_table, &vm_filter,
-            tap_device, &self.external_interface,
+            &ruleset,
+            "ip",
+            &filter_table,
+            &vm_filter,
+            tap_device,
+            &self.external_interface,
         ));
 
         // IPv6 forwarding for this VM
         if self.ipv6_enabled {
-            if let Some(ip6_filter_table) = get_table_for_chain(&ruleset, "ip6", &self.supervisor_filter_chain()) {
+            if let Some(ip6_filter_table) =
+                get_table_for_chain(&ruleset, "ip6", &self.supervisor_filter_chain())
+            {
                 let vm_filter6 = self.vm_filter_chain(vm_id);
-                commands.extend(chains::add_chain_if_not_present(&ruleset, "ip6", &ip6_filter_table, &vm_filter6));
+                commands.extend(chains::add_chain_if_not_present(
+                    &ruleset,
+                    "ip6",
+                    &ip6_filter_table,
+                    &vm_filter6,
+                ));
                 commands.extend(rules::add_jump_if_not_present(
-                    &ruleset, "ip6", &ip6_filter_table, &self.supervisor_filter_chain(), &vm_filter6,
+                    &ruleset,
+                    "ip6",
+                    &ip6_filter_table,
+                    &self.supervisor_filter_chain(),
+                    &vm_filter6,
                 ));
                 commands.extend(rules::add_forward_accept_if_not_present(
-                    &ruleset, "ip6", &ip6_filter_table, &vm_filter6,
-                    tap_device, &self.external_interface,
+                    &ruleset,
+                    "ip6",
+                    &ip6_filter_table,
+                    &vm_filter6,
+                    tap_device,
+                    &self.external_interface,
                 ));
             }
         }
@@ -222,8 +285,9 @@ impl NftablesManager {
     ) -> Result<()> {
         let ruleset = execute_list_ruleset()?;
 
-        let prerouting_table = get_table_for_chain(&ruleset, "ip", &self.supervisor_prerouting_chain())
-            .context("supervisor prerouting chain not found")?;
+        let prerouting_table =
+            get_table_for_chain(&ruleset, "ip", &self.supervisor_prerouting_chain())
+                .context("supervisor prerouting chain not found")?;
         let filter_table = get_table_for_chain(&ruleset, "ip", &self.vm_filter_chain(vm_id))
             .context("VM filter chain not found — set up VM first")?;
 
@@ -363,7 +427,13 @@ impl NftablesManager {
     }
 
     /// Find the name of a base chain for a given hook in a table.
-    fn find_base_chain_name(&self, ruleset: &[Value], family: &str, table: &str, hook: &str) -> String {
+    fn find_base_chain_name(
+        &self,
+        ruleset: &[Value],
+        family: &str,
+        table: &str,
+        hook: &str,
+    ) -> String {
         for entry in ruleset {
             if let Some(chain) = entry.get("chain") {
                 if chain.get("family").and_then(|f| f.as_str()) == Some(family)
@@ -483,7 +553,13 @@ fn find_or_create_table_for_hook(ruleset: &[Value], hook: &str, family: &str) ->
     ];
 
     execute_nft_commands(&commands)?;
-    info!(family, table, chain = chain_name, hook, "created base chain");
+    info!(
+        family,
+        table,
+        chain = chain_name,
+        hook,
+        "created base chain"
+    );
 
     Ok(table.to_string())
 }
@@ -495,7 +571,10 @@ fn get_table_for_chain(ruleset: &[Value], family: &str, chain_name: &str) -> Opt
             if chain.get("family").and_then(|f| f.as_str()) == Some(family)
                 && chain.get("name").and_then(|n| n.as_str()) == Some(chain_name)
             {
-                return chain.get("table").and_then(|t| t.as_str()).map(|s| s.to_string());
+                return chain
+                    .get("table")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
             }
         }
     }

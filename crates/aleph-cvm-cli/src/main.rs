@@ -200,10 +200,8 @@ async fn main() -> Result<()> {
             ipv6_prefix_len,
             encrypted,
         } => {
-            let disks: Vec<DiskConfig> = disk
-                .iter()
-                .map(|s| parse_disk(s))
-                .collect::<Result<_>>()?;
+            let disks: Vec<DiskConfig> =
+                disk.iter().map(|s| parse_disk(s)).collect::<Result<_>>()?;
 
             let tee = tee_backend.map(|backend| TeeConfig {
                 backend,

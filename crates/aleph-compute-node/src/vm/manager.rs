@@ -20,9 +20,9 @@ use aleph_tee::types::VmConfig;
 
 use crate::network;
 use crate::persistence::{self, PersistedVm};
-use crate::qemu::args::{build_qemu_command, QemuPaths};
-use crate::verity;
+use crate::qemu::args::{QemuPaths, build_qemu_command};
 use crate::qemu::process::QemuProcess;
+use crate::verity;
 use crate::vm::lifecycle::VmState;
 
 /// Internal handle for a managed VM.
@@ -159,7 +159,10 @@ impl VmManager {
             let mut used = self.used_ip_offsets.write().await;
             let free = (1u8..=254).find(|o| !used.contains(o));
             match free {
-                Some(o) => { used.insert(o); o }
+                Some(o) => {
+                    used.insert(o);
+                    o
+                }
                 None => anyhow::bail!("IPv4 address pool exhausted (254 VMs max)"),
             }
         };
@@ -231,14 +234,18 @@ impl VmManager {
             info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
             verity::build_kernel_cmdline(None, true)
         } else if let Some(rootfs_disk) = config.disks.first() {
-            let vinfo = verity::ensure_verity(&rootfs_disk.path)
-                .context("dm-verity setup failed — refusing to boot without integrity verification")?;
+            let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
+                "dm-verity setup failed — refusing to boot without integrity verification",
+            )?;
             // Insert hash tree as second disk (right after rootfs)
-            config.disks.insert(1, aleph_tee::types::DiskConfig {
-                path: vinfo.hashtree_path,
-                readonly: true,
-                format: "raw".to_string(),
-            });
+            config.disks.insert(
+                1,
+                aleph_tee::types::DiskConfig {
+                    path: vinfo.hashtree_path,
+                    readonly: true,
+                    format: "raw".to_string(),
+                },
+            );
             verity::build_kernel_cmdline(Some(&vinfo.root_hash), false)
         } else {
             verity::build_kernel_cmdline(None, false)
@@ -339,9 +346,7 @@ impl VmManager {
     /// Get information about a specific VM.
     pub async fn get_vm(&self, id: &str) -> Result<VmInfo> {
         let vms = self.vms.read().await;
-        let handle = vms
-            .get(id)
-            .with_context(|| format!("VM {id} not found"))?;
+        let handle = vms.get(id).with_context(|| format!("VM {id} not found"))?;
         Ok(VmInfo::from_handle(handle))
     }
 
@@ -363,11 +368,9 @@ impl VmManager {
             pf.remove_all_for_vm(id)
         };
         for fwd in &removed_forwards {
-            let _ = self.nftables.remove_port_forward(
-                fwd.host_port,
-                fwd.vm_port,
-                fwd.protocol,
-            );
+            let _ = self
+                .nftables
+                .remove_port_forward(fwd.host_port, fwd.vm_port, fwd.protocol);
         }
 
         // Remove NDP proxy range
@@ -464,9 +467,10 @@ impl VmManager {
         };
 
         // Add nftables rules (outside the lock — this is a system call).
-        if let Err(e) = self.nftables.add_port_forward(
-            vm_id, guest_ip, forward.host_port, vm_port, protocol,
-        ) {
+        if let Err(e) =
+            self.nftables
+                .add_port_forward(vm_id, guest_ip, forward.host_port, vm_port, protocol)
+        {
             // Roll back the reservation on nftables failure.
             let mut pf = self.port_forwards.lock().await;
             pf.remove(forward.host_port, forward.protocol);
@@ -479,11 +483,7 @@ impl VmManager {
     }
 
     /// Remove a port forwarding rule.
-    pub async fn remove_port_forward(
-        &self,
-        host_port: u16,
-        protocol: Protocol,
-    ) -> Result<()> {
+    pub async fn remove_port_forward(&self, host_port: u16, protocol: Protocol) -> Result<()> {
         let forward = {
             let mut pf = self.port_forwards.lock().await;
             pf.remove(host_port, protocol)
@@ -531,7 +531,10 @@ impl VmManager {
             return Ok(());
         }
 
-        info!(count = persisted_vms.len(), "recovering VMs from persisted state");
+        info!(
+            count = persisted_vms.len(),
+            "recovering VMs from persisted state"
+        );
 
         let mut vms = self.vms.write().await;
         let mut used_offsets = self.used_ip_offsets.write().await;
@@ -578,7 +581,11 @@ impl VmManager {
                 // Replay port forward nftables rules
                 for fwd in &pvm.port_forwards {
                     if let Err(e) = self.nftables.add_port_forward(
-                        &vm_id, pvm.ip, fwd.host_port, fwd.vm_port, fwd.protocol,
+                        &vm_id,
+                        pvm.ip,
+                        fwd.host_port,
+                        fwd.vm_port,
+                        fwd.protocol,
                     ) {
                         warn!(vm_id = %vm_id, port = fwd.host_port, error = %e,
                             "failed to restore port forward for recovered VM");

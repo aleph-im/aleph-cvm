@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use anyhow::Context;
 use clap::Parser;
 use tokio::sync::RwLock;
@@ -14,9 +14,7 @@ use tower::service_fn;
 use tracing::{error, info, warn};
 
 use aleph_compute_proto::compute::compute_node_client::ComputeNodeClient;
-use aleph_compute_proto::compute::{
-    DeleteVmRequest, HealthRequest, ListVmsRequest,
-};
+use aleph_compute_proto::compute::{DeleteVmRequest, HealthRequest, ListVmsRequest};
 
 use crate::adapter::AdapterConfig;
 use crate::aleph::allocations::{self, Allocation};
@@ -68,7 +66,9 @@ struct AppState {
 }
 
 /// Connect to the compute-node gRPC server over a Unix domain socket.
-async fn connect_compute_node(socket_path: &std::path::Path) -> anyhow::Result<ComputeNodeClient<Channel>> {
+async fn connect_compute_node(
+    socket_path: &std::path::Path,
+) -> anyhow::Result<ComputeNodeClient<Channel>> {
     let socket_path = socket_path.to_path_buf();
 
     // tonic requires a valid URI even for UDS; the host is ignored.
@@ -129,12 +129,7 @@ async fn handle_allocation(
     let running: HashSet<String> = {
         let mut client = state.compute_client.write().await;
         match client.list_vms(ListVmsRequest {}).await {
-            Ok(resp) => resp
-                .into_inner()
-                .vms
-                .into_iter()
-                .map(|v| v.vm_id)
-                .collect(),
+            Ok(resp) => resp.into_inner().vms.into_iter().map(|v| v.vm_id).collect(),
             Err(e) => {
                 error!(error = %e, "failed to list VMs from compute node");
                 return HttpResponse::InternalServerError().json(serde_json::json!({
@@ -290,14 +285,13 @@ async fn main() -> anyhow::Result<()> {
         .allocation_token_hash
         .as_deref()
         .map(|h| {
-            let bytes = hex::decode(h)
-                .context("allocation-token-hash must be valid hex")?;
-            let arr: [u8; 32] = bytes
-                .try_into()
-                .map_err(|v: Vec<u8>| anyhow::anyhow!(
+            let bytes = hex::decode(h).context("allocation-token-hash must be valid hex")?;
+            let arr: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!(
                     "allocation-token-hash must be 32 bytes (SHA-256), got {}",
                     v.len()
-                ))?;
+                )
+            })?;
             Ok::<[u8; 32], anyhow::Error>(arr)
         })
         .transpose()?;

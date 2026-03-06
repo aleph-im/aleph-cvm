@@ -79,11 +79,7 @@ fn write_cache(path: &std::path::Path, data: &[u8]) {
 ///
 /// Returns the VCEK certificate in DER format. Results are cached on disk
 /// to avoid hitting AMD's rate limiter on repeated requests.
-pub async fn fetch_vcek(
-    product: &str,
-    chip_id: &[u8; 64],
-    tcb: &TcbParams,
-) -> Result<Vec<u8>> {
+pub async fn fetch_vcek(product: &str, chip_id: &[u8; 64], tcb: &TcbParams) -> Result<Vec<u8>> {
     let chip_id_hex = hex::encode(chip_id);
 
     // Check cache first
@@ -176,8 +172,7 @@ pub async fn fetch_ca_chain(product: &str) -> Result<(Vec<u8>, Vec<u8>)> {
         (ask_der, ark_der)
     } else {
         // Fallback: try splitting as concatenated DER
-        split_der_certs(&bytes)
-            .context("failed to split CA chain into ASK and ARK certificates")?
+        split_der_certs(&bytes).context("failed to split CA chain into ASK and ARK certificates")?
     };
 
     if let Some((ref ask_path, ref ark_path)) = cache_paths {
@@ -247,10 +242,8 @@ fn der_object_length(data: &[u8]) -> Result<usize> {
 
         let mut content_len: usize = 0;
         for i in 0..num_length_bytes {
-            content_len = content_len
-                .checked_shl(8)
-                .context("DER length overflow")?
-                | data[2 + i] as usize;
+            content_len =
+                content_len.checked_shl(8).context("DER length overflow")? | data[2 + i] as usize;
         }
 
         // Total = tag(1) + length_byte(1) + num_length_bytes + content_len

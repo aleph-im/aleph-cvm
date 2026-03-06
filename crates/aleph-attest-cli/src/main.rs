@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "aleph-attest-cli", about = "Client-side TEE attestation verifier")]
+#[command(
+    name = "aleph-attest-cli",
+    about = "Client-side TEE attestation verifier"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -79,12 +82,8 @@ async fn main() -> Result<()> {
             let expected = args.parse_expected_measurement()?;
             println!("Making attested request to {}...", args.url);
 
-            let response = client::attested_request(
-                &args.url,
-                &args.amd_product,
-                expected.as_deref(),
-            )
-            .await?;
+            let response =
+                client::attested_request(&args.url, &args.amd_product, expected.as_deref()).await?;
 
             println!("Attestation valid: {}", response.attestation_valid);
             println!("Summary:           {}", response.attestation_summary);
@@ -97,12 +96,9 @@ async fn main() -> Result<()> {
             let expected = args.parse_expected_measurement()?;
             println!("Requesting fresh attestation from {}...", args.url);
 
-            let report = client::fresh_attestation(
-                &args.url,
-                &args.amd_product,
-                expected.as_deref(),
-            )
-            .await?;
+            let report =
+                client::fresh_attestation(&args.url, &args.amd_product, expected.as_deref())
+                    .await?;
 
             println!("Fresh attestation verified successfully!");
             println!("  TEE type:     {:?}", report.tee_type);
@@ -116,7 +112,11 @@ async fn main() -> Result<()> {
                 anyhow::bail!("at least one --secret key=value is required");
             }
 
-            println!("Injecting {} secret(s) into {}...", secrets.len(), common.url);
+            println!(
+                "Injecting {} secret(s) into {}...",
+                secrets.len(),
+                common.url
+            );
 
             let resp = client::inject_secret(
                 &common.url,

@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use crate::traits::TeeBackend;
 use crate::types::{AttestationReport, TeeType, VerificationResult, VmConfig};
 
-use super::qemu::{sev_snp_qemu_args, DEFAULT_OVMF_PATH};
+use super::qemu::{DEFAULT_OVMF_PATH, sev_snp_qemu_args};
 use super::report::{extract_measurement, extract_report_data, parse_sev_snp_report};
 
 /// SEV-SNP backend implementing the `TeeBackend` trait.
@@ -48,8 +48,8 @@ impl TeeBackend for SevSnpBackend {
     fn get_report(&self, report_data: &[u8; 64]) -> Result<AttestationReport> {
         #[cfg(target_os = "linux")]
         {
-            let mut fw = sev::firmware::guest::Firmware::open()
-                .context("failed to open /dev/sev-guest")?;
+            let mut fw =
+                sev::firmware::guest::Firmware::open().context("failed to open /dev/sev-guest")?;
 
             let raw = fw
                 .get_report(None, Some(*report_data), None)
@@ -176,7 +176,9 @@ mod tests {
         sev_report.chip_id[0] = 1;
 
         let mut buf = Vec::new();
-        sev_report.encode(&mut buf, ()).expect("encode should succeed");
+        sev_report
+            .encode(&mut buf, ())
+            .expect("encode should succeed");
 
         let parsed = backend.parse_report(&buf).expect("parse should succeed");
 
@@ -213,7 +215,9 @@ mod tests {
         sev_report.chip_id[0] = 1;
 
         let mut buf = Vec::new();
-        sev_report.encode(&mut buf, ()).expect("encode should succeed");
+        sev_report
+            .encode(&mut buf, ())
+            .expect("encode should succeed");
 
         let report = backend.parse_report(&buf).unwrap();
         let result = backend.verify_report(&report).unwrap();

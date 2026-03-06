@@ -28,8 +28,7 @@ pub async fn verify_sev_snp_report(
     let raw = &report.data;
 
     // 1. Parse the report
-    let parsed = parse_sev_snp_report(raw)
-        .context("failed to parse SEV-SNP attestation report")?;
+    let parsed = parse_sev_snp_report(raw).context("failed to parse SEV-SNP attestation report")?;
 
     let measurement = extract_measurement(&parsed).to_vec();
 
@@ -71,8 +70,7 @@ pub async fn verify_sev_snp_report(
     }
 
     // 6. Verify certificate chain
-    verify_cert_chain(&chain)
-        .context("certificate chain verification failed")?;
+    verify_cert_chain(&chain).context("certificate chain verification failed")?;
 
     // 7. Verify report signature
     verify_report_signature(raw, &chain.vcek_der)
@@ -81,9 +79,7 @@ pub async fn verify_sev_snp_report(
     Ok(VerificationResult {
         valid: true,
         tee_type: TeeType::SevSnp,
-        summary: format!(
-            "SEV-SNP report verified successfully (product: {product})"
-        ),
+        summary: format!("SEV-SNP report verified successfully (product: {product})"),
         measurement,
         details: json!({
             "product": product,
@@ -113,39 +109,40 @@ const AMD_ORG_NAME: &str = "Advanced Micro Devices";
 /// - ASK is signed by ARK
 /// - VCEK is signed by ASK
 pub fn verify_cert_chain(chain: &CertChain) -> Result<()> {
-    let ark = X509::from_der(&chain.ark_der)
-        .context("failed to parse ARK certificate")?;
-    let ask = X509::from_der(&chain.ask_der)
-        .context("failed to parse ASK certificate")?;
-    let vcek = X509::from_der(&chain.vcek_der)
-        .context("failed to parse VCEK certificate")?;
+    let ark = X509::from_der(&chain.ark_der).context("failed to parse ARK certificate")?;
+    let ask = X509::from_der(&chain.ask_der).context("failed to parse ASK certificate")?;
+    let vcek = X509::from_der(&chain.vcek_der).context("failed to parse VCEK certificate")?;
 
     // Verify the ARK certificate belongs to AMD by checking subject fields.
     // This prevents cache-poisoning attacks where an attacker replaces the
     // cached ARK with a self-signed cert from a different issuer.
-    verify_ark_identity(&ark)
-        .context("ARK identity verification failed")?;
+    verify_ark_identity(&ark).context("ARK identity verification failed")?;
 
     // Verify ARK is self-signed
-    let ark_pubkey = ark.public_key()
+    let ark_pubkey = ark
+        .public_key()
         .context("failed to extract ARK public key")?;
-    if !ark.verify(&ark_pubkey)
+    if !ark
+        .verify(&ark_pubkey)
         .context("failed to verify ARK self-signature")?
     {
         bail!("ARK certificate is not validly self-signed");
     }
 
     // Verify ASK is signed by ARK
-    if !ask.verify(&ark_pubkey)
+    if !ask
+        .verify(&ark_pubkey)
         .context("failed to verify ASK signature")?
     {
         bail!("ASK certificate is not signed by ARK");
     }
 
     // Verify VCEK is signed by ASK
-    let ask_pubkey = ask.public_key()
+    let ask_pubkey = ask
+        .public_key()
         .context("failed to extract ASK public key")?;
-    if !vcek.verify(&ask_pubkey)
+    if !vcek
+        .verify(&ask_pubkey)
         .context("failed to verify VCEK signature")?
     {
         bail!("VCEK certificate is not signed by ASK");
@@ -170,10 +167,7 @@ fn verify_ark_identity(ark: &X509) -> Result<()> {
         .entries_by_nid(cn_nid)
         .next()
         .context("ARK certificate has no Common Name in subject")?;
-    let cn_str = cn
-        .data()
-        .as_utf8()
-        .context("ARK CN is not valid UTF-8")?;
+    let cn_str = cn.data().as_utf8().context("ARK CN is not valid UTF-8")?;
 
     let cn_str: &str = &cn_str;
     if !cn_str.starts_with(AMD_ARK_CN_PREFIX) {
@@ -206,7 +200,9 @@ fn verify_ark_identity(ark: &X509) -> Result<()> {
 
     // Verify issuer == subject (ARK must be self-issued)
     // Compare the DER encoding of issuer and subject names.
-    let subject_der = subject.to_der().context("failed to encode subject to DER")?;
+    let subject_der = subject
+        .to_der()
+        .context("failed to encode subject to DER")?;
     let issuer_der = issuer.to_der().context("failed to encode issuer to DER")?;
     if subject_der != issuer_der {
         bail!("ARK certificate issuer does not match subject (not self-issued)");
@@ -238,8 +234,20 @@ pub fn verify_report_signature(report_raw: &[u8], vcek_der: &[u8]) -> Result<()>
     let s_bytes_le = &report_raw[sig_offset + 72..sig_offset + 144];
 
     // Convert from little-endian to big-endian (openssl expects big-endian)
-    let r_bytes_be: Vec<u8> = r_bytes_le.iter().rev().collect::<Vec<_>>().into_iter().copied().collect();
-    let s_bytes_be: Vec<u8> = s_bytes_le.iter().rev().collect::<Vec<_>>().into_iter().copied().collect();
+    let r_bytes_be: Vec<u8> = r_bytes_le
+        .iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .copied()
+        .collect();
+    let s_bytes_be: Vec<u8> = s_bytes_le
+        .iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .copied()
+        .collect();
 
     // Strip leading zeros but keep at least 1 byte
     let r_trimmed = strip_leading_zeros(&r_bytes_be);
@@ -261,13 +269,16 @@ pub fn verify_report_signature(report_raw: &[u8], vcek_der: &[u8]) -> Result<()>
     // Extract VCEK public key
     let vcek = X509::from_der(vcek_der)
         .context("failed to parse VCEK certificate for signature verification")?;
-    let vcek_pkey = vcek.public_key()
+    let vcek_pkey = vcek
+        .public_key()
         .context("failed to extract VCEK public key")?;
-    let ec_key = vcek_pkey.ec_key()
+    let ec_key = vcek_pkey
+        .ec_key()
         .context("VCEK public key is not an EC key")?;
 
     // Verify the ECDSA signature
-    let valid = ecdsa_sig.verify(&digest, &ec_key)
+    let valid = ecdsa_sig
+        .verify(&digest, &ec_key)
         .context("ECDSA signature verification failed")?;
 
     if !valid {

@@ -180,10 +180,16 @@ mod tests {
         assert_eq!(config.kernel, std::path::PathBuf::from("/boot/vmlinuz"));
         assert_eq!(config.initrd, std::path::PathBuf::from("/boot/initrd.img"));
         assert_eq!(config.disks.len(), 2);
-        assert_eq!(config.disks[0].path, std::path::PathBuf::from("/images/rootfs.ext4"));
+        assert_eq!(
+            config.disks[0].path,
+            std::path::PathBuf::from("/images/rootfs.ext4")
+        );
         assert!(config.disks[0].readonly);
         assert_eq!(config.disks[0].format, "raw");
-        assert_eq!(config.disks[1].path, std::path::PathBuf::from("/data/volume.qcow2"));
+        assert_eq!(
+            config.disks[1].path,
+            std::path::PathBuf::from("/data/volume.qcow2")
+        );
         assert!(!config.disks[1].readonly);
         assert_eq!(config.disks[1].format, "qcow2");
         assert_eq!(config.vcpus, 4);

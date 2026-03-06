@@ -65,18 +65,13 @@ pub fn build_qemu_command(
     // QMP socket
     args.extend([
         "-qmp".into(),
-        format!(
-            "unix:{},server,nowait",
-            paths.qmp_socket.display()
-        ),
+        format!("unix:{},server,nowait", paths.qmp_socket.display()),
     ]);
 
     // Network (TAP) with explicit MAC for DHCP reservation
     args.extend([
         "-netdev".into(),
-        format!(
-            "tap,id=net0,ifname={tap_name},script=no,downscript=no"
-        ),
+        format!("tap,id=net0,ifname={tap_name},script=no,downscript=no"),
         "-device".into(),
         format!("virtio-net-pci,netdev=net0,mac={mac_addr}"),
     ]);
@@ -99,9 +94,7 @@ pub fn build_qemu_command(
         let ro = if disk.readonly { "on" } else { "off" };
         args.extend([
             "-drive".into(),
-            format!(
-                "file={path_str},format={format},if=virtio,readonly={ro}",
-            ),
+            format!("file={path_str},format={format},if=virtio,readonly={ro}",),
         ]);
     }
 
@@ -152,7 +145,10 @@ mod tests {
         let backend = SevSnpBackend::new("Genoa");
         let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
 
-        let kernel_idx = args.iter().position(|a| a == "-kernel").expect("-kernel flag missing");
+        let kernel_idx = args
+            .iter()
+            .position(|a| a == "-kernel")
+            .expect("-kernel flag missing");
         assert_eq!(args[kernel_idx + 1], "/boot/vmlinuz");
     }
 
@@ -163,7 +159,10 @@ mod tests {
         let backend = SevSnpBackend::new("Genoa");
         let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
 
-        let append_idx = args.iter().position(|a| a == "-append").expect("-append flag missing");
+        let append_idx = args
+            .iter()
+            .position(|a| a == "-append")
+            .expect("-append flag missing");
         assert_eq!(args[append_idx + 1], TEST_CMDLINE);
         assert!(
             !args[append_idx + 1].contains("ip="),
@@ -255,7 +254,10 @@ mod tests {
         let backend = SevSnpBackend::new("Genoa");
         let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, cmdline);
 
-        let append_idx = args.iter().position(|a| a == "-append").expect("-append flag missing");
+        let append_idx = args
+            .iter()
+            .position(|a| a == "-append")
+            .expect("-append flag missing");
         assert!(args[append_idx + 1].contains("roothash="));
         assert!(args[append_idx + 1].contains("verity-root"));
     }
@@ -263,6 +265,9 @@ mod tests {
     #[test]
     fn test_qemu_paths() {
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "my-vm");
-        assert_eq!(paths.qmp_socket, PathBuf::from("/run/aleph-cvm/my-vm/qmp.sock"));
+        assert_eq!(
+            paths.qmp_socket,
+            PathBuf::from("/run/aleph-cvm/my-vm/qmp.sock")
+        );
     }
 }

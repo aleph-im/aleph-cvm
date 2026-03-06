@@ -95,7 +95,9 @@ pub async fn translate_message(
                     let path = cache
                         .ensure_cached(&parent.item_ref, VolumeCategory::Data)
                         .await
-                        .with_context(|| format!("downloading parent volume {}", parent.item_ref))?;
+                        .with_context(|| {
+                            format!("downloading parent volume {}", parent.item_ref)
+                        })?;
 
                     disks.push(ProtoDiskConfig {
                         path: path.display().to_string(),
