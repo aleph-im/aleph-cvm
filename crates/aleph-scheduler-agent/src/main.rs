@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse};
+use anyhow::Context;
 use clap::Parser;
 use tokio::sync::RwLock;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -289,12 +290,17 @@ async fn main() -> anyhow::Result<()> {
         .allocation_token_hash
         .as_deref()
         .map(|h| {
-            let bytes = hex::decode(h).expect("allocation-token-hash must be valid hex");
+            let bytes = hex::decode(h)
+                .context("allocation-token-hash must be valid hex")?;
             let arr: [u8; 32] = bytes
                 .try_into()
-                .expect("allocation-token-hash must be 32 bytes (SHA-256)");
-            arr
-        });
+                .map_err(|v: Vec<u8>| anyhow::anyhow!(
+                    "allocation-token-hash must be 32 bytes (SHA-256), got {}",
+                    v.len()
+                ))?;
+            Ok::<[u8; 32], anyhow::Error>(arr)
+        })
+        .transpose()?;
 
     let state = Arc::new(AppState {
         compute_client: RwLock::new(compute_client),

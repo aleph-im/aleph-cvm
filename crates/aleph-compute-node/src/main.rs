@@ -2,6 +2,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
 use ipnet::Ipv6Net;
 use tracing::info;
@@ -114,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
     // Ensure the bridge is set up
     network::ensure_bridge(&cli.bridge, cli.gateway_ip, 24)
         .await
-        .expect("failed to ensure bridge");
+        .context("failed to ensure bridge")?;
 
     // Create the TEE backend
     let mut backend = SevSnpBackend::new(&cli.amd_product);
@@ -146,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Initialize nftables supervisor chains
-    manager.setup_nftables().expect("failed to initialize nftables");
+    manager.setup_nftables().context("failed to initialize nftables")?;
 
     // Recover VMs from previous run
     if let Err(e) = manager.recover_vms().await {
