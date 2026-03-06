@@ -239,11 +239,10 @@ pub fn port_accept_rule(
 pub fn rule_jumps_to(rule: &Value, target: &str) -> bool {
     if let Some(exprs) = rule.get("expr").and_then(|e| e.as_array()) {
         for expr in exprs {
-            if let Some(jump) = expr.get("jump") {
-                if jump.get("target").and_then(|t| t.as_str()) == Some(target) {
+            if let Some(jump) = expr.get("jump")
+                && jump.get("target").and_then(|t| t.as_str()) == Some(target) {
                     return true;
                 }
-            }
         }
     }
     false
@@ -271,20 +270,15 @@ pub fn is_dnat_rule_matching(
 
     for expr in exprs {
         // Check dport match
-        if let Some(m) = expr.get("match") {
-            if let Some(left) = m.get("left") {
-                if let Some(payload) = left.get("payload") {
-                    if payload.get("field").and_then(|f| f.as_str()) == Some("dport")
+        if let Some(m) = expr.get("match")
+            && let Some(left) = m.get("left")
+                && let Some(payload) = left.get("payload")
+                    && payload.get("field").and_then(|f| f.as_str()) == Some("dport")
                         && payload.get("protocol").and_then(|p| p.as_str())
                             == Some(&protocol.to_string())
-                    {
-                        if m.get("right").and_then(|r| r.as_u64()) == Some(host_port as u64) {
+                        && m.get("right").and_then(|r| r.as_u64()) == Some(host_port as u64) {
                             has_dport_match = true;
                         }
-                    }
-                }
-            }
-        }
 
         // Check dnat
         if expr.get("dnat").is_some() {
@@ -298,34 +292,27 @@ pub fn is_dnat_rule_matching(
 /// Check if any rule in the ruleset uses a given port.
 pub fn port_in_use(ruleset: &[Value], port: u16) -> bool {
     for entry in ruleset {
-        if let Some(rule) = entry.get("rule") {
-            if let Some(exprs) = rule.get("expr").and_then(|e| e.as_array()) {
+        if let Some(rule) = entry.get("rule")
+            && let Some(exprs) = rule.get("expr").and_then(|e| e.as_array()) {
                 for expr in exprs {
                     // Check dport match
-                    if let Some(m) = expr.get("match") {
-                        if let Some(right) = m.get("right") {
-                            if right.as_u64() == Some(port as u64) {
-                                if let Some(left) = m.get("left") {
-                                    if let Some(payload) = left.get("payload") {
-                                        if payload.get("field").and_then(|f| f.as_str())
+                    if let Some(m) = expr.get("match")
+                        && let Some(right) = m.get("right")
+                            && right.as_u64() == Some(port as u64)
+                                && let Some(left) = m.get("left")
+                                    && let Some(payload) = left.get("payload")
+                                        && payload.get("field").and_then(|f| f.as_str())
                                             == Some("dport")
                                         {
                                             return true;
                                         }
-                                    }
-                                }
-                            }
-                        }
-                    }
                     // Check dnat port
-                    if let Some(dnat) = expr.get("dnat") {
-                        if dnat.get("port").and_then(|p| p.as_u64()) == Some(port as u64) {
+                    if let Some(dnat) = expr.get("dnat")
+                        && dnat.get("port").and_then(|p| p.as_u64()) == Some(port as u64) {
                             return true;
                         }
-                    }
                 }
             }
-        }
     }
     false
 }
@@ -368,22 +355,18 @@ fn has_iifname_oifname_accept(rule: &Value, iifname: &str, oifname: &str) -> boo
         let mut found_accept = false;
 
         for e in exprs {
-            if let Some(m) = e.get("match") {
-                if let Some(left) = m.get("left") {
-                    if let Some(meta) = left.get("meta") {
-                        if meta.get("key").and_then(|k| k.as_str()) == Some("iifname") {
-                            if m.get("right").and_then(|r| r.as_str()) == Some(iifname) {
+            if let Some(m) = e.get("match")
+                && let Some(left) = m.get("left")
+                    && let Some(meta) = left.get("meta") {
+                        if meta.get("key").and_then(|k| k.as_str()) == Some("iifname")
+                            && m.get("right").and_then(|r| r.as_str()) == Some(iifname) {
                                 found_iif = true;
                             }
-                        }
-                        if meta.get("key").and_then(|k| k.as_str()) == Some("oifname") {
-                            if m.get("right").and_then(|r| r.as_str()) == Some(oifname) {
+                        if meta.get("key").and_then(|k| k.as_str()) == Some("oifname")
+                            && m.get("right").and_then(|r| r.as_str()) == Some(oifname) {
                                 found_oif = true;
                             }
-                        }
                     }
-                }
-            }
             if e.get("accept").is_some() {
                 found_accept = true;
             }

@@ -22,12 +22,7 @@ impl PortForwardState {
 
     /// Auto-allocate a host port, starting from `start` and searching upward.
     pub fn auto_allocate(&self, protocol: Protocol, start: u16) -> Option<u16> {
-        for port in start..=65535 {
-            if self.is_available(port, protocol) {
-                return Some(port);
-            }
-        }
-        None
+        (start..=65535).find(|&port| self.is_available(port, protocol))
     }
 
     /// Register a port forward.

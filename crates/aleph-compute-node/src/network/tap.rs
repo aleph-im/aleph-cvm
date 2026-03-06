@@ -38,11 +38,10 @@ pub fn write_dhcp_reservation(hostsdir: &Path, vm_id: &str, mac: &str, ip: Ipv4A
 /// Remove a dnsmasq DHCP host reservation file for a VM.
 pub fn remove_dhcp_reservation(hostsdir: &Path, vm_id: &str) {
     let path = hostsdir.join(vm_id);
-    if let Err(e) = std::fs::remove_file(&path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    if let Err(e) = std::fs::remove_file(&path)
+        && e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(path = %path.display(), error = %e, "failed to remove DHCP reservation");
         }
-    }
 }
 
 /// Create a TAP interface and attach it to a bridge.
@@ -120,11 +119,10 @@ pub fn write_dhcpv6_reservation(
 /// Remove a dnsmasq DHCPv6 host reservation file for a VM.
 pub fn remove_dhcpv6_reservation(hostsdir: &Path, vm_id: &str) {
     let path = hostsdir.join(format!("{vm_id}.v6"));
-    if let Err(e) = std::fs::remove_file(&path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    if let Err(e) = std::fs::remove_file(&path)
+        && e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(path = %path.display(), error = %e, "failed to remove DHCPv6 reservation");
         }
-    }
 }
 
 #[cfg(test)]

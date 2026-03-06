@@ -26,8 +26,8 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
         let rootfs_mtime = rootfs_path.metadata().and_then(|m| m.modified()).ok();
         let cache_mtime = roothash_path.metadata().and_then(|m| m.modified()).ok();
 
-        if let (Some(rootfs_t), Some(cache_t)) = (rootfs_mtime, cache_mtime) {
-            if cache_t >= rootfs_t {
+        if let (Some(rootfs_t), Some(cache_t)) = (rootfs_mtime, cache_mtime)
+            && cache_t >= rootfs_t {
                 let root_hash = std::fs::read_to_string(&roothash_path)
                     .context("failed to read cached roothash")?
                     .trim()
@@ -38,7 +38,6 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
                     hashtree_path,
                 });
             }
-        }
     }
 
     // Compute verity hash tree
