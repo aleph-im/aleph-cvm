@@ -66,6 +66,20 @@ fi
 
 /bin/busybox mkdir -p /mnt/root
 
+# Prepare the chroot environment: bind-mount /proc, /sys, /dev and set up DNS.
+# Called after mounting rootfs, before starting /sbin/init.
+prepare_chroot() {
+    /bin/busybox mkdir -p /mnt/root/proc /mnt/root/sys /mnt/root/dev /mnt/root/etc
+    /bin/busybox mount --bind /proc /mnt/root/proc
+    /bin/busybox mount --bind /sys /mnt/root/sys
+    /bin/busybox mount --bind /dev /mnt/root/dev
+    # DNS: use gateway as nameserver (common for VM bridges).
+    if [ -n "$gateway" ]; then
+        echo "nameserver ${gateway}" > /mnt/root/etc/resolv.conf
+    fi
+    echo "init: chroot environment prepared (proc, sys, dev, DNS)"
+}
+
 if [ "$luks" = "1" ]; then
     # ── LUKS encrypted rootfs mode ──────────────────────────────────────
 
@@ -109,6 +123,7 @@ if [ "$luks" = "1" ]; then
 
                 echo "init: mounting /dev/mapper/cryptroot"
                 if /bin/busybox mount -t ext4 /dev/mapper/cryptroot /mnt/root 2>&1; then
+                    prepare_chroot
                     if [ -x /mnt/root/sbin/init ]; then
                         echo "init: starting /sbin/init from rootfs"
                         /bin/busybox chroot /mnt/root /sbin/init &
@@ -185,6 +200,7 @@ else
             fi
         fi
 
+        prepare_chroot
         if [ -x /mnt/root/sbin/init ]; then
             echo "init: starting /sbin/init from rootfs"
             /bin/busybox chroot /mnt/root /sbin/init &
