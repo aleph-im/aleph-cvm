@@ -93,13 +93,14 @@ impl ServerCertVerifier for SnpCertVerifier {
 
         // 3. If an expected measurement is configured, verify it matches.
         if let Some(ref expected) = self.expected_measurement
-            && report.measurement != *expected {
-                return Err(Error::General(format!(
-                    "measurement mismatch: expected {}, got {}",
-                    hex::encode(expected),
-                    hex::encode(&report.measurement),
-                )));
-            }
+            && report.measurement != *expected
+        {
+            return Err(Error::General(format!(
+                "measurement mismatch: expected {}, got {}",
+                hex::encode(expected),
+                hex::encode(&report.measurement),
+            )));
+        }
 
         let mut stored = self.extracted_report.lock().unwrap();
         *stored = Some(report);
