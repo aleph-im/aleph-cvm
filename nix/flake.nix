@@ -111,19 +111,32 @@
             | tr -d '\n' > $out/roothash
         '';
 
-        # Pre-computed SEV-SNP launch measurement for the demo config (2 vCPUs).
-        # The kernel cmdline now includes the dm-verity root hash, so the
+        # Pre-computed SEV-SNP launch measurement.
+        # The kernel cmdline includes the dm-verity root hash, so the
         # measurement covers the full stack: firmware + kernel + initrd +
         # cmdline (with roothash) → transitively covers rootfs integrity.
-        measurement = let
+        #
+        # Usage:
+        #   nix build .#measurement                        # default: 2 vCPUs, EPYC-v4
+        #   nix build .#measurement --override-input vcpus 4
+        #   nix build .#measurement-4vcpus-epyc-v4         # pre-built variant
+        #
+        # The measurement is a function of (OVMF + kernel + initrd + cmdline +
+        # vCPU count + CPU type), so each configuration needs its own value.
+        measurement = self.packages.${system}.measurementFor { vcpus = 2; vcpuType = "EPYC-v4"; };
+
+        # Parameterized measurement builder.
+        # vcpus: number of vCPUs (affects SEV-SNP launch measurement)
+        # vcpuType: QEMU CPU model (e.g. "EPYC-v4" for Genoa, "EPYC-v3" for Milan)
+        measurementFor = { vcpus ? 2, vcpuType ? "EPYC-v4" }: let
           kernelCmdline = "console=ttyS0 root=/dev/mapper/verity-root ro roothash=${builtins.readFile "${self.packages.${system}.verity}/roothash"}";
-        in pkgs.runCommand "sev-snp-measurement" {
+        in pkgs.runCommand "sev-snp-measurement-${toString vcpus}vcpus-${vcpuType}" {
           nativeBuildInputs = [ sev-snp-measure ];
         } ''
           sev-snp-measure \
             --mode snp \
-            --vcpus 2 \
-            --vcpu-type EPYC-v4 \
+            --vcpus ${toString vcpus} \
+            --vcpu-type ${vcpuType} \
             --ovmf ${ovmfFd} \
             --kernel ${self.packages.${system}.kernel}/bzImage \
             --initrd ${self.packages.${system}.initrd}/initrd \
