@@ -390,18 +390,20 @@ echo "$FORWARD_RESPONSE"
 HOST_PORT=$(echo "$FORWARD_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['hostPort'])")
 ok "Port forward: host :${HOST_PORT} → VM :8443"
 
-# Test connectivity through forwarded port
-info "Testing forwarded port..."
+# Test connectivity through forwarded port.
+# Use the bridge gateway IP — localhost traffic bypasses nftables DNAT
+# rules because they match on the external interface, not loopback.
+info "Testing forwarded port via ${GATEWAY}:${HOST_PORT}..."
 for i in $(seq 1 10); do
-    if curl -skf "https://localhost:${HOST_PORT}/health" >/dev/null 2>&1; then
+    if curl -skf "https://${GATEWAY}:${HOST_PORT}/health" >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
-if curl -skf "https://localhost:${HOST_PORT}/health" >/dev/null 2>&1; then
+if curl -skf "https://${GATEWAY}:${HOST_PORT}/health" >/dev/null 2>&1; then
     ok "Service reachable via forwarded port ${HOST_PORT}"
 else
-    warn "Service not reachable via forwarded port (nftables may need host route)"
+    warn "Service not reachable via forwarded port"
 fi
 
 # List port forwards
