@@ -33,7 +33,6 @@ struct VmHandle {
     ipv6: Option<Ipv6Net>,
     process: Option<QemuProcess>,
     tap_name: String,
-    mac_addr: String,
     /// Wall-clock creation time (seconds since UNIX epoch).
     /// Used for uptime calculation that survives orchestrator restarts.
     created_at_epoch: u64,
@@ -292,7 +291,7 @@ impl VmManager {
             ip: vm_ip,
             ipv6: vm_ipv6,
             tap_name: tap_name.clone(),
-            mac_addr: mac_addr.clone(),
+            mac_addr: mac_addr,
             port_forwards: vec![],
             created_at_epoch: now_epoch,
         };
@@ -308,14 +307,13 @@ impl VmManager {
             ipv6: vm_ipv6,
             process: Some(process),
             tap_name,
-            mac_addr: mac_addr.clone(),
             created_at_epoch: now_epoch,
         };
 
         let info = VmInfo::from_handle(&handle);
 
         self.vms.write().await.insert(vm_id.clone(), handle);
-        info!(vm_id = %vm_id, ip = %vm_ip, ipv6 = ?vm_ipv6, mac = %mac_addr, "VM created");
+        info!(vm_id = %vm_id, ip = %vm_ip, ipv6 = ?vm_ipv6, "VM created");
 
         Ok(info)
     }
@@ -600,7 +598,6 @@ impl VmManager {
                 ipv6: pvm.ipv6,
                 process,
                 tap_name: pvm.tap_name,
-                mac_addr: pvm.mac_addr,
                 created_at_epoch: pvm.created_at_epoch,
             };
 
