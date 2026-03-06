@@ -112,6 +112,11 @@ impl NumaAllocator {
         }
     }
 
+    /// Number of NUMA nodes in the topology.
+    pub fn num_nodes(&self) -> usize {
+        self.topology.num_nodes()
+    }
+
     /// Allocate vCPUs and memory on a NUMA node using pack-first strategy.
     ///
     /// If `hint` is `Some(node_id)`, only that specific node is tried.

@@ -259,12 +259,17 @@ impl VmManager {
             verity::build_kernel_cmdline(None, false)
         };
 
-        // Allocate NUMA node
+        // Allocate NUMA node — only set numa_node (which triggers QEMU
+        // host-nodes binding) when there are multiple nodes. On single-node
+        // systems binding is unnecessary and may not be supported by QEMU.
         let placement = {
             let mut numa = self.numa.lock().await;
-            numa.allocate(config.vcpus, config.memory_mb, numa_hint)?
+            let p = numa.allocate(config.vcpus, config.memory_mb, numa_hint)?;
+            if numa.num_nodes() > 1 {
+                config.numa_node = Some(p.node);
+            }
+            p
         };
-        config.numa_node = Some(placement.node);
 
         // Build QEMU command
         let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
@@ -585,8 +590,11 @@ impl VmManager {
                 Err(_) => (None, VmState::Stopped),
             };
 
-            // Restore NUMA allocation
-            if let Some(node) = pvm.numa_node {
+            // Restore NUMA allocation only for running VMs — stopped VMs
+            // have no QEMU process and aren't consuming hugepages or CPUs.
+            if state == VmState::Running
+                && let Some(node) = pvm.numa_node
+            {
                 let mut numa = self.numa.lock().await;
                 let _ = numa
                     .allocate(pvm.config.vcpus, pvm.config.memory_mb, Some(node))
