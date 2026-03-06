@@ -58,7 +58,9 @@ pub fn load_all_vms(state_dir: &Path) -> Result<Vec<PersistedVm>> {
             match std::fs::read_to_string(&path) {
                 Ok(json) => match serde_json::from_str::<PersistedVm>(&json) {
                     Ok(vm) => vms.push(vm),
-                    Err(e) => warn!(path = %path.display(), error = %e, "skipping malformed VM state file"),
+                    Err(e) => {
+                        warn!(path = %path.display(), error = %e, "skipping malformed VM state file")
+                    }
                 },
                 Err(e) => warn!(path = %path.display(), error = %e, "failed to read VM state file"),
             }

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use aleph_tee::types::AttestationReport;
 use aleph_tee::x509::extract_attestation_from_cert;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
+use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha384};
@@ -67,18 +67,15 @@ impl ServerCertVerifier for SnpCertVerifier {
                 ))
             })?
             .ok_or_else(|| {
-                Error::General(
-                    "certificate does not contain an attestation extension".to_string(),
-                )
+                Error::General("certificate does not contain an attestation extension".to_string())
             })?;
 
         // 2. Verify key binding: report_data must equal SHA-384(public_key) || zeros.
         //    This proves the attestation report was generated for this specific TLS key,
         //    preventing replay of someone else's attestation report.
-        let (_, cert) =
-            x509_parser::parse_x509_certificate(end_entity.as_ref()).map_err(|e| {
-                Error::General(format!("failed to parse certificate for key binding: {e}"))
-            })?;
+        let (_, cert) = x509_parser::parse_x509_certificate(end_entity.as_ref()).map_err(|e| {
+            Error::General(format!("failed to parse certificate for key binding: {e}"))
+        })?;
         let public_key_bytes = cert.tbs_certificate.subject_pki.subject_public_key.data;
 
         let hash = Sha384::digest(public_key_bytes);

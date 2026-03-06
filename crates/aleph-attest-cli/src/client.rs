@@ -30,9 +30,7 @@ pub struct InjectSecretResponse {
 }
 
 /// Build a reqwest client with our custom TLS verifier.
-fn build_attested_client(
-    verifier: &Arc<SnpCertVerifier>,
-) -> Result<reqwest::Client> {
+fn build_attested_client(verifier: &Arc<SnpCertVerifier>) -> Result<reqwest::Client> {
     let tls_config = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier.clone())
@@ -110,10 +108,7 @@ pub async fn fresh_attestation(
     // Build the attestation URL
     let base = url::Url::parse(base_url).context("failed to parse base URL")?;
     let attestation_url = base
-        .join(&format!(
-            ".well-known/attestation?nonce={}",
-            nonce_hex
-        ))
+        .join(&format!(".well-known/attestation?nonce={}", nonce_hex))
         .context("failed to construct attestation URL")?;
 
     let verifier = SnpCertVerifier::new(expected_measurement.map(|m| m.to_vec()));
@@ -148,7 +143,10 @@ pub async fn fresh_attestation(
         .context("SEV-SNP report verification failed")?;
 
     if !result.valid {
-        bail!("SEV-SNP attestation report is not valid: {}", result.summary);
+        bail!(
+            "SEV-SNP attestation report is not valid: {}",
+            result.summary
+        );
     }
 
     Ok(report)

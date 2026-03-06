@@ -23,14 +23,8 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
 
     // Check if cached artifacts are still valid
     if hashtree_path.exists() && roothash_path.exists() {
-        let rootfs_mtime = rootfs_path
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok();
-        let cache_mtime = roothash_path
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok();
+        let rootfs_mtime = rootfs_path.metadata().and_then(|m| m.modified()).ok();
+        let cache_mtime = roothash_path.metadata().and_then(|m| m.modified()).ok();
 
         if let (Some(rootfs_t), Some(cache_t)) = (rootfs_mtime, cache_mtime) {
             if cache_t >= rootfs_t {

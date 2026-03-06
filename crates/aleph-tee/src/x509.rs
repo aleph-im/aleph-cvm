@@ -19,8 +19,8 @@ pub const ATTESTATION_OID_STR: &str = "1.3.6.1.4.1.60000.1.1";
 /// in a DER OctetString. This produces the extension value suitable for
 /// embedding in an X.509 certificate extension.
 pub fn encode_attestation_extension(report: &AttestationReport) -> Result<Vec<u8>> {
-    let json_bytes = serde_json::to_vec(report)
-        .context("failed to serialize AttestationReport to JSON")?;
+    let json_bytes =
+        serde_json::to_vec(report).context("failed to serialize AttestationReport to JSON")?;
 
     let octet_string = OctetStringRef::new(&json_bytes)
         .map_err(|e| anyhow::anyhow!("failed to create OctetString: {e}"))?;
@@ -101,16 +101,14 @@ mod tests {
         let original = make_test_report();
 
         // Encode
-        let encoded = encode_attestation_extension(&original)
-            .expect("encoding should succeed");
+        let encoded = encode_attestation_extension(&original).expect("encoding should succeed");
 
         // Verify it looks like DER (starts with OCTET STRING tag 0x04)
         assert!(!encoded.is_empty());
         assert_eq!(encoded[0], 0x04, "DER should start with OCTET STRING tag");
 
         // Decode
-        let decoded = decode_attestation_extension(&encoded)
-            .expect("decoding should succeed");
+        let decoded = decode_attestation_extension(&encoded).expect("decoding should succeed");
 
         // Verify fields match
         assert_eq!(decoded.tee_type, original.tee_type);
@@ -129,10 +127,8 @@ mod tests {
                 measurement: vec![0xFF; 32],
             };
 
-            let encoded = encode_attestation_extension(&report)
-                .expect("encoding should succeed");
-            let decoded = decode_attestation_extension(&encoded)
-                .expect("decoding should succeed");
+            let encoded = encode_attestation_extension(&report).expect("encoding should succeed");
+            let decoded = decode_attestation_extension(&encoded).expect("decoding should succeed");
 
             assert_eq!(decoded.tee_type, tee_type);
         }
@@ -160,25 +156,26 @@ mod tests {
         let report = make_test_report();
 
         // Encode the attestation extension
-        let extension_value = encode_attestation_extension(&report)
-            .expect("encoding should succeed");
+        let extension_value =
+            encode_attestation_extension(&report).expect("encoding should succeed");
 
         // Create a self-signed certificate with our custom extension
         let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()])
             .expect("CertificateParams should be valid");
 
-        let custom_ext =
-            rcgen::CustomExtension::from_oid_content(ATTESTATION_OID, extension_value);
+        let custom_ext = rcgen::CustomExtension::from_oid_content(ATTESTATION_OID, extension_value);
         params.custom_extensions.push(custom_ext);
 
         let key_pair = rcgen::KeyPair::generate().expect("key generation should succeed");
-        let cert = params.self_signed(&key_pair).expect("self-signing should succeed");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("self-signing should succeed");
 
         let cert_der = cert.der().to_vec();
 
         // Extract the attestation report from the certificate
-        let extracted = extract_attestation_from_cert(&cert_der)
-            .expect("extraction should succeed");
+        let extracted =
+            extract_attestation_from_cert(&cert_der).expect("extraction should succeed");
 
         assert!(extracted.is_some(), "extension should be found");
         let extracted = extracted.unwrap();
@@ -195,13 +192,15 @@ mod tests {
             .expect("CertificateParams should be valid");
 
         let key_pair = rcgen::KeyPair::generate().expect("key generation should succeed");
-        let cert = params.self_signed(&key_pair).expect("self-signing should succeed");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("self-signing should succeed");
 
         let cert_der = cert.der().to_vec();
 
         // Extract should return None
-        let extracted = extract_attestation_from_cert(&cert_der)
-            .expect("extraction should succeed");
+        let extracted =
+            extract_attestation_from_cert(&cert_der).expect("extraction should succeed");
 
         assert!(extracted.is_none(), "no extension should be found");
     }

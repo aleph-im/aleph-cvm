@@ -12,12 +12,15 @@ pub fn add_jump_if_not_present(
 ) -> Vec<Value> {
     // Check if a jump from from_chain → to_chain already exists
     let exists = ruleset.iter().any(|entry| {
-        entry.get("rule").map(|r| {
-            r.get("family").and_then(|f| f.as_str()) == Some(family)
-                && r.get("table").and_then(|t| t.as_str()) == Some(table)
-                && r.get("chain").and_then(|c| c.as_str()) == Some(from_chain)
-                && has_jump_to(r, to_chain)
-        }).unwrap_or(false)
+        entry
+            .get("rule")
+            .map(|r| {
+                r.get("family").and_then(|f| f.as_str()) == Some(family)
+                    && r.get("table").and_then(|t| t.as_str()) == Some(table)
+                    && r.get("chain").and_then(|c| c.as_str()) == Some(from_chain)
+                    && has_jump_to(r, to_chain)
+            })
+            .unwrap_or(false)
     });
 
     if exists {
@@ -42,12 +45,15 @@ pub fn add_conntrack_if_not_present(
     chain: &str,
 ) -> Vec<Value> {
     let exists = ruleset.iter().any(|entry| {
-        entry.get("rule").map(|r| {
-            r.get("family").and_then(|f| f.as_str()) == Some(family)
-                && r.get("table").and_then(|t| t.as_str()) == Some(table)
-                && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
-                && has_conntrack_accept(r)
-        }).unwrap_or(false)
+        entry
+            .get("rule")
+            .map(|r| {
+                r.get("family").and_then(|f| f.as_str()) == Some(family)
+                    && r.get("table").and_then(|t| t.as_str()) == Some(table)
+                    && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
+                    && has_conntrack_accept(r)
+            })
+            .unwrap_or(false)
     });
 
     if exists {
@@ -81,12 +87,15 @@ pub fn add_masquerade_if_not_present(
     oifname: &str,
 ) -> Vec<Value> {
     let exists = ruleset.iter().any(|entry| {
-        entry.get("rule").map(|r| {
-            r.get("family").and_then(|f| f.as_str()) == Some(family)
-                && r.get("table").and_then(|t| t.as_str()) == Some(table)
-                && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
-                && has_masquerade(r)
-        }).unwrap_or(false)
+        entry
+            .get("rule")
+            .map(|r| {
+                r.get("family").and_then(|f| f.as_str()) == Some(family)
+                    && r.get("table").and_then(|t| t.as_str()) == Some(table)
+                    && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
+                    && has_masquerade(r)
+            })
+            .unwrap_or(false)
     });
 
     if exists {
@@ -125,12 +134,15 @@ pub fn add_forward_accept_if_not_present(
     oifname: &str,
 ) -> Vec<Value> {
     let exists = ruleset.iter().any(|entry| {
-        entry.get("rule").map(|r| {
-            r.get("family").and_then(|f| f.as_str()) == Some(family)
-                && r.get("table").and_then(|t| t.as_str()) == Some(table)
-                && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
-                && has_iifname_oifname_accept(r, iifname, oifname)
-        }).unwrap_or(false)
+        entry
+            .get("rule")
+            .map(|r| {
+                r.get("family").and_then(|f| f.as_str()) == Some(family)
+                    && r.get("table").and_then(|t| t.as_str()) == Some(table)
+                    && r.get("chain").and_then(|c| c.as_str()) == Some(chain)
+                    && has_iifname_oifname_accept(r, iifname, oifname)
+            })
+            .unwrap_or(false)
     });
 
     if exists {
@@ -438,13 +450,25 @@ mod tests {
         });
 
         assert!(is_dnat_rule_matching(
-            &rule, "aleph-supervisor-prerouting", 8080, 80, Protocol::Tcp
+            &rule,
+            "aleph-supervisor-prerouting",
+            8080,
+            80,
+            Protocol::Tcp
         ));
         assert!(!is_dnat_rule_matching(
-            &rule, "aleph-supervisor-prerouting", 9090, 80, Protocol::Tcp
+            &rule,
+            "aleph-supervisor-prerouting",
+            9090,
+            80,
+            Protocol::Tcp
         ));
         assert!(!is_dnat_rule_matching(
-            &rule, "other-chain", 8080, 80, Protocol::Tcp
+            &rule,
+            "other-chain",
+            8080,
+            80,
+            Protocol::Tcp
         ));
     }
 }

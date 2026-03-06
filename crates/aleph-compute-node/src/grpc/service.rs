@@ -8,7 +8,9 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use aleph_compute_proto::compute::compute_node_server::{ComputeNode, ComputeNodeServer as TonicServer};
+use aleph_compute_proto::compute::compute_node_server::{
+    ComputeNode, ComputeNodeServer as TonicServer,
+};
 use aleph_compute_proto::compute::{
     AddPortForwardRequest, CreateVmRequest, DeleteVmRequest, DeleteVmResponse, GetVmRequest,
     HealthRequest, HealthResponse, ListPortForwardsRequest, ListPortForwardsResponse,
@@ -36,13 +38,18 @@ fn validate_vm_id(vm_id: &str) -> Result<(), Status> {
             vm_id.len()
         )));
     }
-    if !vm_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+    if !vm_id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
         return Err(Status::invalid_argument(
             "vm_id must contain only lowercase alphanumeric characters and hyphens",
         ));
     }
     if vm_id.starts_with('-') || vm_id.ends_with('-') {
-        return Err(Status::invalid_argument("vm_id must not start or end with a hyphen"));
+        return Err(Status::invalid_argument(
+            "vm_id must not start or end with a hyphen",
+        ));
     }
     Ok(())
 }
@@ -50,14 +57,20 @@ fn validate_vm_id(vm_id: &str) -> Result<(), Status> {
 /// Validate that a file path exists and is an absolute path.
 fn validate_file_path(path: &str, field_name: &str) -> Result<(), Status> {
     if path.is_empty() {
-        return Err(Status::invalid_argument(format!("{field_name} must not be empty")));
+        return Err(Status::invalid_argument(format!(
+            "{field_name} must not be empty"
+        )));
     }
     let p = std::path::Path::new(path);
     if !p.is_absolute() {
-        return Err(Status::invalid_argument(format!("{field_name} must be an absolute path")));
+        return Err(Status::invalid_argument(format!(
+            "{field_name} must be an absolute path"
+        )));
     }
     if !p.exists() {
-        return Err(Status::invalid_argument(format!("{field_name} does not exist: {path}")));
+        return Err(Status::invalid_argument(format!(
+            "{field_name} does not exist: {path}"
+        )));
     }
     Ok(())
 }
@@ -102,18 +115,16 @@ impl ComputeNodeServer {
         info!(socket = %socket_path.display(), "gRPC server listening");
 
         let reflection = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(
-                aleph_compute_proto::compute::FILE_DESCRIPTOR_SET,
-            )
+            .register_encoded_file_descriptor_set(aleph_compute_proto::compute::FILE_DESCRIPTOR_SET)
             .build_v1()?;
 
         let shutdown = async {
-            let mut sigint = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::interrupt(),
-            ).expect("failed to install SIGINT handler");
-            let mut sigterm = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::terminate(),
-            ).expect("failed to install SIGTERM handler");
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .expect("failed to install SIGINT handler");
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
             tokio::select! {
                 _ = sigint.recv() => info!("received SIGINT, shutting down"),
                 _ = sigterm.recv() => info!("received SIGTERM, shutting down"),
@@ -139,13 +150,19 @@ struct ComputeNodeService {
     manager: Arc<VmManager>,
 }
 
-fn parse_tee_config(proto: Option<aleph_compute_proto::compute::TeeConfig>) -> Result<TeeConfig, Status> {
+fn parse_tee_config(
+    proto: Option<aleph_compute_proto::compute::TeeConfig>,
+) -> Result<TeeConfig, Status> {
     let proto = proto.unwrap_or_default();
     let backend = match proto.backend.as_str() {
         "sev-snp" | "" => TeeType::SevSnp,
         "tdx" => TeeType::Tdx,
         "nvidia-cc" => TeeType::NvidiaCc,
-        other => return Err(Status::invalid_argument(format!("unknown TEE backend: {other}"))),
+        other => {
+            return Err(Status::invalid_argument(format!(
+                "unknown TEE backend: {other}"
+            )));
+        }
     };
     let policy = if proto.policy.is_empty() {
         None
@@ -183,7 +200,11 @@ impl ComputeNode for ComputeNodeService {
         for d in &req.disks {
             validate_file_path(&d.path, "disk path")?;
             // Validate disk format against allowlist to prevent QEMU parameter injection.
-            let fmt = if d.format.is_empty() { "raw" } else { &d.format };
+            let fmt = if d.format.is_empty() {
+                "raw"
+            } else {
+                &d.format
+            };
             if fmt != "raw" && fmt != "qcow2" {
                 return Err(Status::invalid_argument(format!(
                     "unsupported disk format: {fmt} (allowed: raw, qcow2)"
@@ -251,10 +272,7 @@ impl ComputeNode for ComputeNodeService {
         Ok(Response::new(vm_info_to_proto(&info)))
     }
 
-    async fn get_vm(
-        &self,
-        request: Request<GetVmRequest>,
-    ) -> Result<Response<VmInfo>, Status> {
+    async fn get_vm(&self, request: Request<GetVmRequest>) -> Result<Response<VmInfo>, Status> {
         let req = request.into_inner();
 
         let info = self
@@ -303,7 +321,12 @@ impl ComputeNode for ComputeNodeService {
 
         let forward = self
             .manager
-            .add_port_forward(&req.vm_id, req.host_port as u16, req.vm_port as u16, protocol)
+            .add_port_forward(
+                &req.vm_id,
+                req.host_port as u16,
+                req.vm_port as u16,
+                protocol,
+            )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 

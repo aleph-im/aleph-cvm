@@ -3,7 +3,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use zeroize::Zeroizing;
@@ -44,9 +44,7 @@ pub struct InjectSecretResponse {
 /// written to disk. Files are created with mode 0600.
 ///
 /// Limits: max 16 secrets, max 64-char key names, max 64 KiB per value.
-pub async fn inject_secret_handler(
-    body: web::Json<InjectSecretRequest>,
-) -> HttpResponse {
+pub async fn inject_secret_handler(body: web::Json<InjectSecretRequest>) -> HttpResponse {
     // Acquire the injection lock for the entire operation.
     // This eliminates the TOCTOU race that existed with AtomicBool.
     let mut guard = match INJECTION_LOCK.lock() {
@@ -78,7 +76,10 @@ pub async fn inject_secret_handler(
             return HttpResponse::BadRequest()
                 .json(serde_json::json!({"error": format!("secret key length must be 1-{MAX_KEY_LEN}, got {}", key.len())}));
         }
-        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        if !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
             return HttpResponse::BadRequest()
                 .json(serde_json::json!({"error": format!("invalid secret key: must be alphanumeric/underscore/hyphen, got: {key}")}));
         }

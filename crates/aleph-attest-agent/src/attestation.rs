@@ -28,10 +28,7 @@ pub fn get_key_bound_report(
 /// If the nonce is longer than 64 bytes, it is hashed with SHA-384 and the result
 /// is zero-padded to 64 bytes. Otherwise, the nonce is placed directly into
 /// report_data and zero-padded.
-pub fn get_nonce_bound_report(
-    backend: &dyn TeeBackend,
-    nonce: &[u8],
-) -> Result<AttestationReport> {
+pub fn get_nonce_bound_report(backend: &dyn TeeBackend, nonce: &[u8]) -> Result<AttestationReport> {
     let mut report_data = [0u8; 64];
 
     if nonce.len() > 64 {

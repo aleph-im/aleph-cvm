@@ -20,9 +20,7 @@ pub fn start_vm_unit(
     rw_dirs: &[&std::path::Path],
 ) -> Result<()> {
     let unit = unit_name(vm_id);
-    let (program, args) = qemu_args
-        .split_first()
-        .context("empty qemu args")?;
+    let (program, args) = qemu_args.split_first().context("empty qemu args")?;
 
     // ReadWritePaths: VM runtime dir (QMP socket) + any writable disk directories.
     let mut rw_path_list = vec![run_dir.display().to_string()];
@@ -33,33 +31,56 @@ pub fn start_vm_unit(
 
     let mut cmd = std::process::Command::new("systemd-run");
     cmd.args([
-        "--unit", &unit,
+        "--unit",
+        &unit,
         // Lifecycle
-        "--property", "Type=simple",
-        "--property", "Restart=on-failure",
-        "--property", "RestartSec=5s",
-        "--property", "KillMode=mixed",
-        "--property", "TimeoutStopSec=30",
+        "--property",
+        "Type=simple",
+        "--property",
+        "Restart=on-failure",
+        "--property",
+        "RestartSec=5s",
+        "--property",
+        "KillMode=mixed",
+        "--property",
+        "TimeoutStopSec=30",
         // Logging
-        "--property", &format!("SyslogIdentifier={unit}"),
-        "--property", "StandardOutput=journal",
-        "--property", "StandardError=journal",
+        "--property",
+        &format!("SyslogIdentifier={unit}"),
+        "--property",
+        "StandardOutput=journal",
+        "--property",
+        "StandardError=journal",
         // Sandboxing — restrict QEMU's capabilities and filesystem access.
-        "--property", "NoNewPrivileges=true",
-        "--property", "ProtectSystem=strict",
-        "--property", &rw_paths,
-        "--property", "ProtectHome=true",
-        "--property", "ProtectKernelTunables=true",
-        "--property", "ProtectKernelModules=true",
-        "--property", "ProtectControlGroups=true",
+        "--property",
+        "NoNewPrivileges=true",
+        "--property",
+        "ProtectSystem=strict",
+        "--property",
+        &rw_paths,
+        "--property",
+        "ProtectHome=true",
+        "--property",
+        "ProtectKernelTunables=true",
+        "--property",
+        "ProtectKernelModules=true",
+        "--property",
+        "ProtectControlGroups=true",
         // Device access — only allow what QEMU needs
-        "--property", "DevicePolicy=closed",
-        "--property", "DeviceAllow=/dev/kvm rw",
-        "--property", "DeviceAllow=/dev/sev-guest rw",
-        "--property", "DeviceAllow=/dev/sev rw",
-        "--property", "DeviceAllow=/dev/null rw",
-        "--property", "DeviceAllow=/dev/urandom r",
-        "--property", "DeviceAllow=/dev/net/tun rw",
+        "--property",
+        "DevicePolicy=closed",
+        "--property",
+        "DeviceAllow=/dev/kvm rw",
+        "--property",
+        "DeviceAllow=/dev/sev-guest rw",
+        "--property",
+        "DeviceAllow=/dev/sev rw",
+        "--property",
+        "DeviceAllow=/dev/null rw",
+        "--property",
+        "DeviceAllow=/dev/urandom r",
+        "--property",
+        "DeviceAllow=/dev/net/tun rw",
         "--",
         program,
     ]);
@@ -67,9 +88,7 @@ pub fn start_vm_unit(
 
     info!(unit = %unit, "creating systemd transient unit");
 
-    let output = cmd
-        .output()
-        .context("failed to execute systemd-run")?;
+    let output = cmd.output().context("failed to execute systemd-run")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -48,18 +48,13 @@ impl Allocation {
 ///
 /// The Aleph scheduler signs the JSON body with a shared token.
 /// The `signature` is the hex-encoded HMAC of the body bytes.
-pub fn verify_allocation_signature(
-    body: &[u8],
-    signature: &str,
-    token_hash: &[u8; 32],
-) -> bool {
+pub fn verify_allocation_signature(body: &[u8], signature: &str, token_hash: &[u8; 32]) -> bool {
     let Ok(sig_bytes) = hex::decode(signature) else {
         debug!("allocation signature is not valid hex");
         return false;
     };
 
-    let mut mac = HmacSha256::new_from_slice(token_hash)
-        .expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(token_hash).expect("HMAC accepts any key length");
     mac.update(body);
 
     mac.verify_slice(&sig_bytes).is_ok()
@@ -199,7 +194,11 @@ mod tests {
 
         assert!(verify_allocation_signature(body, &signature, &token_hash));
         assert!(!verify_allocation_signature(body, "invalid", &token_hash));
-        assert!(!verify_allocation_signature(b"wrong body", &signature, &token_hash));
+        assert!(!verify_allocation_signature(
+            b"wrong body",
+            &signature,
+            &token_hash
+        ));
     }
 
     #[test]

@@ -89,9 +89,8 @@ pub async fn proxy_handler(
     // Send the proxied request.
     match proxy_req.send().await {
         Ok(upstream_resp) => {
-            let status =
-                actix_web::http::StatusCode::from_u16(upstream_resp.status().as_u16())
-                    .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+            let status = actix_web::http::StatusCode::from_u16(upstream_resp.status().as_u16())
+                .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
 
             let mut resp = HttpResponse::build(status);
 

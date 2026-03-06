@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ipnet::Ipv6Net;
 use rand::Rng;
 
@@ -32,11 +32,7 @@ impl Ipv6RangeAllocator {
         let net = match requested {
             Some(net) => {
                 if !self.contains(&net) {
-                    bail!(
-                        "requested {} is not within pool {}",
-                        net,
-                        self.pool
-                    );
+                    bail!("requested {} is not within pool {}", net, self.pool);
                 }
                 if self.overlaps(&net) {
                     bail!("requested {} overlaps with an existing allocation", net);

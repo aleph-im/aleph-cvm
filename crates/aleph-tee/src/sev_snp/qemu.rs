@@ -22,11 +22,7 @@ pub const DEFAULT_OVMF_PATH: &str = "/usr/local/share/ovmf-snp/OVMF.fd";
 /// before loading the kernel — without this flag, the blob verifier fails and
 /// OVMF falls back to the embedded GRUB bootloader.
 pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
-    let policy = config
-        .tee
-        .policy
-        .as_deref()
-        .unwrap_or(DEFAULT_POLICY);
+    let policy = config.tee.policy.as_deref().unwrap_or(DEFAULT_POLICY);
 
     vec![
         "-machine".to_string(),
@@ -146,7 +142,10 @@ mod tests {
         let custom_path = "/opt/custom/OVMF.fd";
         let args = sev_snp_qemu_args(&config, custom_path);
 
-        let bios_idx = args.iter().position(|a| a == "-bios").expect("-bios flag missing");
+        let bios_idx = args
+            .iter()
+            .position(|a| a == "-bios")
+            .expect("-bios flag missing");
         assert_eq!(args[bios_idx + 1], custom_path);
     }
 }
