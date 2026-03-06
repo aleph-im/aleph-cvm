@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use ipnet::Ipv6Net;
 use tracing::info;
 
+use aleph_network::bridge::run_ip;
+
 /// Derive a deterministic MAC address from a VM's IP address.
 ///
 /// Format: `52:54:00:{oct2:02x}:{oct3:02x}:{oct4:02x}`
@@ -81,28 +83,6 @@ pub async fn delete_tap(tap_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Ensure a bridge interface exists with the given IP address.
-///
-/// If the bridge already exists, this is a no-op (the `ip link add` will
-/// fail with "File exists", which we ignore). We always attempt to assign
-/// the address and bring the link up.
-pub async fn ensure_bridge(bridge: &str, ip: Ipv4Addr, prefix_len: u8) -> Result<()> {
-    // Create bridge (ignore "already exists" errors)
-    let _ = run_ip(&["link", "add", bridge, "type", "bridge"]).await;
-
-    // Assign address (ignore "already assigned" errors)
-    let addr = format!("{ip}/{prefix_len}");
-    let _ = run_ip(&["addr", "add", &addr, "dev", bridge]).await;
-
-    // Bring it up
-    run_ip(&["link", "set", bridge, "up"])
-        .await
-        .with_context(|| format!("failed to bring up bridge {bridge}"))?;
-
-    info!(bridge = %bridge, addr = %addr, "bridge ensured");
-    Ok(())
-}
-
 /// Allocate a VM IP address by adding `offset` to the gateway IP.
 ///
 /// For example, gateway `10.0.100.1` with offset `5` yields `10.0.100.6`.
@@ -150,22 +130,6 @@ pub fn remove_dhcpv6_reservation(hostsdir: &Path, vm_id: &str) {
             tracing::warn!(path = %path.display(), error = %e, "failed to remove DHCPv6 reservation");
         }
     }
-}
-
-/// Run an `ip` command and return an error if it fails.
-async fn run_ip(args: &[&str]) -> Result<()> {
-    let output = tokio::process::Command::new("ip")
-        .args(args)
-        .output()
-        .await
-        .context("failed to execute `ip` command")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("`ip {}` failed: {}", args.join(" "), stderr.trim());
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
