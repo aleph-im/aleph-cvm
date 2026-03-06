@@ -20,5 +20,5 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 ring.workspace = true
 url = "2"
-rand = "0.8"
+rand.workspace = true
 sha2.workspace = true

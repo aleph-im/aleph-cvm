@@ -104,7 +104,7 @@ pub async fn fresh_attestation(
 ) -> Result<AttestationReport> {
     // Generate a random 32-byte nonce
     let mut nonce = [0u8; 32];
-    rand::thread_rng().fill(&mut nonce);
+    rand::rng().fill(&mut nonce);
     let nonce_hex = hex::encode(nonce);
 
     // Build the attestation URL
