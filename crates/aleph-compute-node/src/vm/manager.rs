@@ -19,6 +19,7 @@ use aleph_tee::traits::TeeBackend;
 use aleph_tee::types::VmConfig;
 
 use crate::network;
+use crate::numa::{NumaAllocator, NumaTopology};
 use crate::persistence::{self, PersistedVm};
 use crate::qemu::args::{QemuPaths, build_qemu_command};
 use crate::qemu::process::QemuProcess;
@@ -36,6 +37,7 @@ struct VmHandle {
     /// Wall-clock creation time (seconds since UNIX epoch).
     /// Used for uptime calculation that survives orchestrator restarts.
     created_at_epoch: u64,
+    numa_node: Option<u32>,
 }
 
 /// JSON-serializable VM information returned by the API.
@@ -47,6 +49,7 @@ pub struct VmInfo {
     pub ipv6: String,
     pub tee: String,
     pub uptime_secs: u64,
+    pub numa_node: Option<u32>,
 }
 
 impl VmInfo {
@@ -62,6 +65,7 @@ impl VmInfo {
                 .unwrap_or_default()
                 .as_secs()
                 .saturating_sub(handle.created_at_epoch),
+            numa_node: handle.numa_node,
         }
     }
 }
@@ -81,6 +85,7 @@ pub struct VmManager {
     port_forwards: Mutex<PortForwardState>,
     ipv6_allocator: Option<Mutex<Ipv6RangeAllocator>>,
     ndp_proxy: Option<Arc<NdpProxy>>,
+    numa: Mutex<NumaAllocator>,
 }
 
 impl VmManager {
@@ -102,6 +107,7 @@ impl VmManager {
         external_interface: String,
         ipv6_pool: Option<Ipv6Net>,
         use_ndp_proxy: bool,
+        numa_topology: NumaTopology,
     ) -> Self {
         let ipv6_enabled = ipv6_pool.is_some();
         let nftables = NftablesManager::new("aleph", &external_interface, ipv6_enabled);
@@ -127,6 +133,7 @@ impl VmManager {
             port_forwards: Mutex::new(PortForwardState::new()),
             ipv6_allocator,
             ndp_proxy,
+            numa: Mutex::new(NumaAllocator::new(numa_topology)),
         }
     }
 
@@ -143,6 +150,7 @@ impl VmManager {
         &self,
         mut config: VmConfig,
         requested_ipv6: Option<Ipv6Net>,
+        numa_hint: Option<u32>,
     ) -> Result<VmInfo> {
         let vm_id = config.vm_id.clone();
 
@@ -251,6 +259,13 @@ impl VmManager {
             verity::build_kernel_cmdline(None, false)
         };
 
+        // Allocate NUMA node
+        let placement = {
+            let mut numa = self.numa.lock().await;
+            numa.allocate(config.vcpus, config.memory_mb, numa_hint)?
+        };
+        config.numa_node = Some(placement.node);
+
         // Build QEMU command
         let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
         let mut args = vec!["qemu-system-x86_64".to_string()];
@@ -272,10 +287,21 @@ impl VmManager {
             .collect();
 
         // Spawn QEMU
-        let process = match QemuProcess::spawn(&args, paths, vm_id.clone(), &rw_dirs) {
+        let process = match QemuProcess::spawn(
+            &args,
+            paths,
+            vm_id.clone(),
+            &rw_dirs,
+            Some(placement.cpuset.as_str()),
+        ) {
             Ok(p) => p,
             Err(e) => {
                 error!(vm_id = %vm_id, error = %e, "failed to spawn QEMU");
+                // Release NUMA allocation
+                {
+                    let mut numa = self.numa.lock().await;
+                    numa.release(placement.node, config.vcpus, config.memory_mb);
+                }
                 // Clean up everything on failure
                 if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
                     ndp.delete_range(&tap_name).await;
@@ -301,6 +327,7 @@ impl VmManager {
             mac_addr,
             port_forwards: vec![],
             created_at_epoch: now_epoch,
+            numa_node: config.numa_node,
         };
         if let Err(e) = persistence::save_vm(&self.state_dir, &vm_id, &persisted) {
             warn!(vm_id = %vm_id, error = %e, "failed to persist VM state (VM is running but not recoverable)");
@@ -315,6 +342,7 @@ impl VmManager {
             process: Some(process),
             tap_name,
             created_at_epoch: now_epoch,
+            numa_node: Some(placement.node),
         };
 
         let info = VmInfo::from_handle(&handle);
@@ -358,6 +386,12 @@ impl VmManager {
         // Stop the QEMU process via systemd if still running
         if let Some(ref process) = handle.process {
             let _ = process.stop();
+        }
+
+        // Release NUMA allocation
+        if let Some(node) = handle.numa_node {
+            let mut numa = self.numa.lock().await;
+            numa.release(node, handle.config.vcpus, handle.config.memory_mb);
         }
 
         // Remove port forwards for this VM
@@ -551,6 +585,16 @@ impl VmManager {
                 Err(_) => (None, VmState::Stopped),
             };
 
+            // Restore NUMA allocation
+            if let Some(node) = pvm.numa_node {
+                let mut numa = self.numa.lock().await;
+                let _ = numa
+                    .allocate(pvm.config.vcpus, pvm.config.memory_mb, Some(node))
+                    .map_err(
+                        |e| warn!(vm_id = %vm_id, error = %e, "failed to restore NUMA allocation"),
+                    );
+            }
+
             // Re-register IPv6 allocation if applicable
             if let Some(ref ipv6) = pvm.ipv6
                 && let Some(ref alloc) = self.ipv6_allocator
@@ -604,6 +648,7 @@ impl VmManager {
                 process,
                 tap_name: pvm.tap_name,
                 created_at_epoch: pvm.created_at_epoch,
+                numa_node: pvm.numa_node,
             };
 
             info!(

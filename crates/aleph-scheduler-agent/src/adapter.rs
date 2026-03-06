@@ -141,6 +141,7 @@ pub async fn translate_message(
         ipv6_address: String::new(),
         ipv6_prefix_len: 0,
         encrypted: msg.is_encrypted(),
+        numa_node: 0,
     };
 
     info!(

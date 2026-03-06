@@ -71,6 +71,10 @@ enum Command {
         /// LUKS encrypted rootfs (user injects key via attest-agent).
         #[arg(long, default_value_t = false)]
         encrypted: bool,
+
+        /// NUMA node hint (0 = auto, 1+ = specific node).
+        #[arg(long, default_value_t = 0)]
+        numa_node: u32,
     },
 
     /// Get information about a VM.
@@ -199,6 +203,7 @@ async fn main() -> Result<()> {
             ipv6_address,
             ipv6_prefix_len,
             encrypted,
+            numa_node,
         } => {
             let disks: Vec<DiskConfig> =
                 disk.iter().map(|s| parse_disk(s)).collect::<Result<_>>()?;
@@ -220,6 +225,7 @@ async fn main() -> Result<()> {
                     ipv6_address,
                     ipv6_prefix_len,
                     encrypted,
+                    numa_node,
                 })
                 .await
                 .context("CreateVm RPC failed")?
@@ -232,6 +238,7 @@ async fn main() -> Result<()> {
                 "ipv6": resp.ipv6,
                 "teeBackend": resp.tee_backend,
                 "uptimeSecs": resp.uptime_secs,
+                "numaNode": resp.numa_node,
             }))?;
         }
 
@@ -249,6 +256,7 @@ async fn main() -> Result<()> {
                 "ipv6": resp.ipv6,
                 "teeBackend": resp.tee_backend,
                 "uptimeSecs": resp.uptime_secs,
+                "numaNode": resp.numa_node,
             }))?;
         }
 
@@ -279,6 +287,7 @@ async fn main() -> Result<()> {
                         "ipv6": vm.ipv6,
                         "teeBackend": vm.tee_backend,
                         "uptimeSecs": vm.uptime_secs,
+                        "numaNode": vm.numa_node,
                     })
                 })
                 .collect();

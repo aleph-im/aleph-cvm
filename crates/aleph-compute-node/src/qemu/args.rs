@@ -127,6 +127,7 @@ mod tests {
                 policy: Some("0x30000".into()),
             },
             encrypted: false,
+            numa_node: None,
         }
     }
 

@@ -148,6 +148,7 @@ mod tests {
                 policy: Some("0x30000".to_string()),
             },
             encrypted: false,
+            numa_node: None,
         };
 
         let args = backend.qemu_args(&config);

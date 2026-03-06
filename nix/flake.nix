@@ -94,6 +94,7 @@
         rootfs = pkgs.callPackage ./rootfs.nix {
           inherit fib-service;
         };
+        compose-rootfs = pkgs.callPackage ./compose-rootfs.nix {};
 
         # Compute dm-verity hash tree and root hash for the demo rootfs.
         # The root hash is embedded in the kernel cmdline, binding rootfs

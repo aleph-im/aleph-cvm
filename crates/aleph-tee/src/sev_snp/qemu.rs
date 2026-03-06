@@ -24,14 +24,23 @@ pub const DEFAULT_OVMF_PATH: &str = "/usr/local/share/ovmf-snp/OVMF.fd";
 pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
     let policy = config.tee.policy.as_deref().unwrap_or(DEFAULT_POLICY);
 
+    let memfd_opts = if let Some(node) = config.numa_node {
+        format!(
+            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M,host-nodes={},policy=bind",
+            config.memory_mb, node
+        )
+    } else {
+        format!(
+            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M",
+            config.memory_mb
+        )
+    };
+
     vec![
         "-machine".to_string(),
         "q35,confidential-guest-support=sev0,memory-backend=ram1,vmport=off".to_string(),
         "-object".to_string(),
-        format!(
-            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M",
-            config.memory_mb
-        ),
+        memfd_opts,
         "-object".to_string(),
         format!(
             "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on,policy={policy}"
@@ -63,6 +72,7 @@ mod tests {
                 policy: policy.map(|s| s.to_string()),
             },
             encrypted: false,
+            numa_node: None,
         }
     }
 
@@ -134,6 +144,43 @@ mod tests {
         assert!(args[1].contains("q35"));
         assert!(args[1].contains("confidential-guest-support=sev0"));
         assert!(args[1].contains("memory-backend=ram1"));
+    }
+
+    #[test]
+    fn test_memory_backend_numa_binding() {
+        let mut config = make_config(2048, None);
+        config.numa_node = Some(1);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let mem_arg = args
+            .iter()
+            .find(|a| a.contains("memory-backend-memfd"))
+            .expect("should have memory-backend-memfd arg");
+
+        assert!(
+            mem_arg.contains("host-nodes=1"),
+            "should bind to NUMA node 1 but got: {mem_arg}"
+        );
+        assert!(
+            mem_arg.contains("policy=bind"),
+            "should have policy=bind but got: {mem_arg}"
+        );
+    }
+
+    #[test]
+    fn test_memory_backend_no_numa() {
+        let config = make_config(2048, None);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let mem_arg = args
+            .iter()
+            .find(|a| a.contains("memory-backend-memfd"))
+            .expect("should have memory-backend-memfd arg");
+
+        assert!(
+            !mem_arg.contains("host-nodes"),
+            "should NOT have host-nodes when numa_node is None: {mem_arg}"
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ use aleph_tee::sev_snp::SevSnpBackend;
 
 use aleph_compute_node::grpc::ComputeNodeServer;
 use aleph_compute_node::network;
+use aleph_compute_node::numa::NumaTopology;
 use aleph_compute_node::vm::VmManager;
 
 #[derive(Parser)]
@@ -135,6 +136,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Detect NUMA topology
+    let numa_topology = NumaTopology::detect().context("failed to detect NUMA topology")?;
+    info!(nodes = numa_topology.num_nodes(), "detected NUMA topology");
+
     // Create the VM manager
     let manager = Arc::new(VmManager::new(
         cli.run_dir.clone(),
@@ -146,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         external_interface,
         cli.ipv6_pool,
         use_ndp_proxy,
+        numa_topology,
     ));
 
     // Initialize nftables supervisor chains

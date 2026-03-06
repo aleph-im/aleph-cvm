@@ -180,6 +180,7 @@ fn vm_info_to_proto(info: &crate::vm::VmInfo) -> VmInfo {
         ipv6: info.ipv6.clone(),
         tee_backend: info.tee.clone(),
         uptime_secs: info.uptime_secs,
+        numa_node: info.numa_node.unwrap_or(0),
     }
 }
 
@@ -252,6 +253,12 @@ impl ComputeNode for ComputeNodeService {
             Some(net)
         };
 
+        let numa_hint = if req.numa_node == 0 {
+            None
+        } else {
+            Some(req.numa_node - 1) // 1-indexed API -> 0-indexed internal
+        };
+
         let config = VmConfig {
             vm_id: req.vm_id,
             kernel: req.kernel.into(),
@@ -261,11 +268,12 @@ impl ComputeNode for ComputeNodeService {
             memory_mb: req.memory_mb,
             tee,
             encrypted: req.encrypted,
+            numa_node: None,
         };
 
         let info = self
             .manager
-            .create_vm(config, requested_ipv6)
+            .create_vm(config, requested_ipv6, numa_hint)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
