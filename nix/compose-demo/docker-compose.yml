@@ -1,0 +1,4 @@
+services:
+  fib:
+    image: fib-service:latest
+    network_mode: host
