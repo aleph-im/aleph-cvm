@@ -128,6 +128,7 @@ mod tests {
             },
             encrypted: false,
             numa_node: None,
+            hugepage_size: None,
         }
     }
 

@@ -68,6 +68,15 @@ struct Cli {
     /// Enable NDP proxy for IPv6 (defaults to true when --ipv6-pool is set).
     #[arg(long)]
     use_ndp_proxy: Option<bool>,
+
+    /// Global memory limit for hugepage-backed VM memory (e.g. "200G", "204800M", "204800").
+    /// Auto-distributed across NUMA nodes. Default: all RAM minus headroom.
+    #[arg(long, value_parser = parse_size_mb)]
+    memory_limit: Option<u32>,
+
+    /// Per-node OS memory headroom (e.g. "4G", "4096M", "4096"). Same on every node.
+    #[arg(long, default_value = "4G", value_parser = parse_size_mb)]
+    hugepage_headroom: u32,
 }
 
 /// Detect the default network interface from /proc/net/route.
@@ -81,6 +90,22 @@ fn detect_default_interface() -> Option<String> {
         }
     }
     None
+}
+
+/// Parse a human-readable size string into megabytes.
+/// Accepts: "4G", "4GB", "4096M", "4096MB", "4096" (plain MB).
+fn parse_size_mb(s: &str) -> Result<u32, String> {
+    let s = s.trim();
+    if let Some(gb) = s.strip_suffix('G').or_else(|| s.strip_suffix("GB")) {
+        gb.trim()
+            .parse::<u32>()
+            .map(|g| g * 1024)
+            .map_err(|e| e.to_string())
+    } else if let Some(mb) = s.strip_suffix('M').or_else(|| s.strip_suffix("MB")) {
+        mb.trim().parse::<u32>().map_err(|e| e.to_string())
+    } else {
+        s.parse::<u32>().map_err(|e| e.to_string())
+    }
 }
 
 #[tokio::main]
@@ -112,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
         external_interface = %external_interface,
         ipv6_pool = ?cli.ipv6_pool,
         use_ndp_proxy = %use_ndp_proxy,
+        memory_limit = ?cli.memory_limit,
+        hugepage_headroom = %cli.hugepage_headroom,
         "starting aleph-compute-node"
     );
 
@@ -137,8 +164,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Detect NUMA topology
-    let numa_topology = NumaTopology::detect().context("failed to detect NUMA topology")?;
+    let mut numa_topology = NumaTopology::detect().context("failed to detect NUMA topology")?;
     info!(nodes = numa_topology.num_nodes(), "detected NUMA topology");
+
+    // Allocate 2M hugepages across NUMA nodes
+    let sysfs_base = std::path::Path::new("/sys/devices/system/node");
+    if let Err(e) = aleph_compute_node::hugepages::allocate_hugepages(
+        &mut numa_topology,
+        cli.hugepage_headroom,
+        cli.memory_limit,
+        sysfs_base,
+    ) {
+        tracing::warn!(error = %e, "hugepage allocation failed (VMs may use regular pages)");
+    }
 
     // Create the VM manager
     let manager = Arc::new(VmManager::new(
