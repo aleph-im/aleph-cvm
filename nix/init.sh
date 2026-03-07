@@ -42,7 +42,8 @@ else
 fi
 
 # Parse boot mode from kernel command line.
-roothash=$(/bin/busybox sed -n 's/.*roothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
+roothash=$(/bin/busybox sed -n 's/.*\broothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
+workload_roothash=$(/bin/busybox sed -n 's/.*workload_roothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
 luks=$(/bin/busybox sed -n 's/.*luks=\([^ ]*\).*/\1/p' /proc/cmdline)
 
 # Wait for block device to appear (shared across all boot paths).
@@ -197,6 +198,60 @@ else
             if ! /bin/busybox mount -o ro "$blkdev" /mnt/root; then
                 echo "init: mount failed, trying without readonly"
                 /bin/busybox mount "$blkdev" /mnt/root || echo "init: mount failed completely"
+            fi
+        fi
+
+        # Mount optional workload volume (vdc + vdd) if workload_roothash is set.
+        # dm-verity modules and /dev/mapper/control are already set up above.
+        if [ -n "$workload_roothash" ]; then
+            echo "init: setting up workload volume with dm-verity"
+            echo "init: workload_roothash=${workload_roothash}"
+            wl_data=""
+            n=0
+            while [ "$n" -lt 30 ]; do
+                if [ -b /dev/vdc ]; then
+                    wl_data="/dev/vdc"
+                    break
+                fi
+                /bin/busybox sleep 0.1
+                n=$((n + 1))
+            done
+
+            if [ -z "$wl_data" ]; then
+                echo "init: FATAL: workload_roothash set but /dev/vdc not found"
+                exec /bin/busybox poweroff -f
+            fi
+
+            wl_hash=""
+            n=0
+            while [ "$n" -lt 30 ]; do
+                if [ -b /dev/vdd ]; then
+                    wl_hash="/dev/vdd"
+                    break
+                fi
+                /bin/busybox sleep 0.1
+                n=$((n + 1))
+            done
+
+            if [ -z "$wl_hash" ]; then
+                echo "init: FATAL: workload_roothash set but /dev/vdd (hash tree) not found"
+                exec /bin/busybox poweroff -f
+            fi
+
+            if /bin/veritysetup open "$wl_data" verity-workload "$wl_hash" "$workload_roothash" 2>&1; then
+                /bin/busybox mkdir -p /mnt/workload
+                if /bin/busybox mount -t ext4 -o ro /dev/mapper/verity-workload /mnt/workload; then
+                    echo "init: workload volume mounted at /mnt/workload"
+                    # Bind-mount into chroot so rootfs /sbin/init can access it.
+                    /bin/busybox mkdir -p /mnt/root/mnt/workload
+                    /bin/busybox mount --bind /mnt/workload /mnt/root/mnt/workload
+                else
+                    echo "init: FATAL: failed to mount workload verity volume"
+                    exec /bin/busybox poweroff -f
+                fi
+            else
+                echo "init: FATAL: workload dm-verity verification failed"
+                exec /bin/busybox poweroff -f
             fi
         fi
 
