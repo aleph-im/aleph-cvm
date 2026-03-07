@@ -41,7 +41,13 @@ impl NumaTopology {
             })
             .collect();
 
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_prefix("node"))
+                .and_then(|n| n.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
 
         for entry in entries {
             let name = entry.file_name();
@@ -143,7 +149,7 @@ impl NumaAllocator {
 
         for idx in candidates {
             let node = &self.topology.nodes[idx];
-            let available_cpus = node.cpus.len() as u32 - self.allocated_vcpus[idx];
+            let available_cpus = (node.cpus.len() as u32).saturating_sub(self.allocated_vcpus[idx]);
             let capacity_mb = node.total_hugepages * 2;
             let available_mb = capacity_mb.saturating_sub(self.allocated_memory_mb[idx]);
 
@@ -413,5 +419,11 @@ mod tests {
     fn test_cpuset_string() {
         let cpus = BTreeSet::from([8, 9, 10, 11]);
         assert_eq!(format_cpuset(&cpus), "8-11");
+    }
+
+    #[test]
+    fn test_cpuset_string_non_contiguous() {
+        let cpus = BTreeSet::from([0, 1, 2, 5, 8, 9, 10]);
+        assert_eq!(format_cpuset(&cpus), "0-2,5,8-10");
     }
 }

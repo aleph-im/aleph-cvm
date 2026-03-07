@@ -332,7 +332,7 @@ impl VmManager {
             mac_addr,
             port_forwards: vec![],
             created_at_epoch: now_epoch,
-            numa_node: config.numa_node,
+            numa_node: Some(placement.node),
         };
         if let Err(e) = persistence::save_vm(&self.state_dir, &vm_id, &persisted) {
             warn!(vm_id = %vm_id, error = %e, "failed to persist VM state (VM is running but not recoverable)");
