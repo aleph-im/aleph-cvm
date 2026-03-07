@@ -28,6 +28,7 @@ fn test_persistence_roundtrip_multiple_vms() {
                     policy: Some("0x30000".to_string()),
                 },
                 encrypted: false,
+                numa_node: None,
             },
             ip: Ipv4Addr::new(10, 0, 100, i + 1),
             ipv6: None,
@@ -35,6 +36,7 @@ fn test_persistence_roundtrip_multiple_vms() {
             mac_addr: format!("52:54:00:00:64:{i:02x}"),
             port_forwards: vec![],
             created_at_epoch: 1709500000 + i as u64,
+            numa_node: None,
         };
         persistence::save_vm(dir.path(), &format!("vm-{i:03}"), &vm).unwrap();
     }

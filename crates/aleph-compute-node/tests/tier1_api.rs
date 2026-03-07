@@ -7,6 +7,7 @@ use std::sync::Arc;
 use aleph_tee::traits::TeeBackend;
 use aleph_tee::types::{AttestationReport, TeeType, VerificationResult, VmConfig};
 
+use aleph_compute_node::numa::NumaTopology;
 use aleph_compute_node::vm::VmManager;
 
 /// A mock TEE backend that returns dummy data without touching hardware.
@@ -63,6 +64,7 @@ fn mock_manager() -> Arc<VmManager> {
         "eth0".to_string(),
         None,  // ipv6_pool
         false, // use_ndp_proxy
+        NumaTopology { nodes: vec![] },
     ))
 }
 

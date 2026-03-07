@@ -26,6 +26,7 @@ message CreateVmRequest {
   uint32 ipv6_prefix_len = 9;   // requested prefix length (0 = /128)
   // true = LUKS encrypted rootfs (skip dm-verity, user injects key via attest-agent)
   bool encrypted = 10;
+  uint32 numa_node = 11;  // 0 = auto (pack-first), 1+ = specific node (1-indexed)
 }
 
 message DiskConfig {
@@ -46,6 +47,7 @@ message VmInfo {
   string ipv6 = 4;
   string tee_backend = 5;
   uint64 uptime_secs = 6;
+  uint32 numa_node = 7;   // NUMA node the VM is placed on (0-indexed)
 }
 
 message GetVmRequest {

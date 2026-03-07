@@ -60,6 +60,9 @@ pub struct VmConfig {
     /// LUKS encrypted rootfs mode (skip dm-verity, user injects key via attest-agent).
     #[serde(default)]
     pub encrypted: bool,
+    /// NUMA node this VM is pinned to (set by the allocator, not the user).
+    #[serde(default)]
+    pub numa_node: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

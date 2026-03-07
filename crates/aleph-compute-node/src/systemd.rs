@@ -18,6 +18,7 @@ pub fn start_vm_unit(
     qemu_args: &[String],
     run_dir: &std::path::Path,
     rw_dirs: &[&std::path::Path],
+    numa_cpuset: Option<&str>,
 ) -> Result<()> {
     let unit = unit_name(vm_id);
     let (program, args) = qemu_args.split_first().context("empty qemu args")?;
@@ -81,9 +82,13 @@ pub fn start_vm_unit(
         "DeviceAllow=/dev/urandom r",
         "--property",
         "DeviceAllow=/dev/net/tun rw",
-        "--",
-        program,
     ]);
+
+    if let Some(cpuset) = numa_cpuset {
+        cmd.args(["--property", &format!("AllowedCPUs={cpuset}")]);
+    }
+
+    cmd.args(["--", program]);
     cmd.args(args);
 
     info!(unit = %unit, "creating systemd transient unit");

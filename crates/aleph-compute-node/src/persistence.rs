@@ -21,6 +21,9 @@ pub struct PersistedVm {
     pub port_forwards: Vec<PortForward>,
     /// Seconds since UNIX epoch when the VM was created.
     pub created_at_epoch: u64,
+    /// NUMA node the VM is pinned to.
+    #[serde(default)]
+    pub numa_node: Option<u32>,
 }
 
 /// Save a VM's metadata to `{state_dir}/{vm_id}.json`.
@@ -100,6 +103,7 @@ mod tests {
                     policy: None,
                 },
                 encrypted: false,
+                numa_node: None,
             },
             ip: Ipv4Addr::new(10, 0, 100, 2),
             ipv6: None,
@@ -107,6 +111,7 @@ mod tests {
             mac_addr: "52:54:00:00:64:02".to_string(),
             port_forwards: vec![],
             created_at_epoch: 1709500000,
+            numa_node: None,
         }
     }
 
