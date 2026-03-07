@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 /// A single NUMA node with its CPU set and hugepage count.
 #[derive(Debug, Clone)]
@@ -71,6 +71,9 @@ impl NumaTopology {
                 .parse()
                 .with_context(|| format!("failed to parse hugepage count for {name}"))?;
 
+            if total_hugepages == 0 {
+                warn!(node = id, "no 2 MiB hugepages on this node — VM allocation will fail");
+            }
             info!(node = id, ?cpus, total_hugepages, "detected NUMA node");
             nodes.push(NumaNode {
                 id,
@@ -137,12 +140,13 @@ impl NumaAllocator {
         hint: Option<u32>,
     ) -> Result<NumaPlacement> {
         let candidates: Vec<usize> = if let Some(node_id) = hint {
-            self.topology
+            let idx = self
+                .topology
                 .nodes
                 .iter()
                 .position(|n| n.id == node_id)
-                .map(|i| vec![i])
-                .unwrap_or_default()
+                .with_context(|| format!("NUMA node {node_id} does not exist"))?;
+            vec![idx]
         } else {
             (0..self.topology.nodes.len()).collect()
         };
