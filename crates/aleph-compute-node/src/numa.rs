@@ -72,7 +72,10 @@ impl NumaTopology {
                 .with_context(|| format!("failed to parse hugepage count for {name}"))?;
 
             if total_hugepages == 0 {
-                warn!(node = id, "no 2 MiB hugepages on this node — VM allocation will fail");
+                warn!(
+                    node = id,
+                    "no 2 MiB hugepages on this node — VM allocation will fail"
+                );
             }
             info!(node = id, ?cpus, total_hugepages, "detected NUMA node");
             nodes.push(NumaNode {
