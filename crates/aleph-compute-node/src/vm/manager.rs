@@ -16,7 +16,7 @@ use aleph_network::ndp_proxy::NdpProxy;
 use aleph_network::nftables::NftablesManager;
 use aleph_network::types::{PortForward, Protocol};
 use aleph_tee::traits::TeeBackend;
-use aleph_tee::types::VmConfig;
+use aleph_tee::types::{HugePageSize, VmConfig};
 
 use crate::network;
 use crate::numa::{NumaAllocator, NumaTopology};
@@ -259,17 +259,13 @@ impl VmManager {
             verity::build_kernel_cmdline(None, false)
         };
 
-        // Allocate NUMA node — only set numa_node (which triggers QEMU
-        // host-nodes binding) when there are multiple nodes. On single-node
-        // systems binding is unnecessary and may not be supported by QEMU.
+        // Allocate NUMA node
         let placement = {
             let mut numa = self.numa.lock().await;
-            let p = numa.allocate(config.vcpus, config.memory_mb, numa_hint)?;
-            if numa.num_nodes() > 1 {
-                config.numa_node = Some(p.node);
-            }
-            p
+            numa.allocate(config.vcpus, config.memory_mb, numa_hint)?
         };
+        config.numa_node = Some(placement.node);
+        config.hugepage_size = Some(placement.hugepage_size);
 
         // Build QEMU command
         let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
@@ -305,7 +301,12 @@ impl VmManager {
                 // Release NUMA allocation
                 {
                     let mut numa = self.numa.lock().await;
-                    numa.release(placement.node, config.vcpus, config.memory_mb);
+                    numa.release(
+                        placement.node,
+                        config.vcpus,
+                        config.memory_mb,
+                        placement.hugepage_size,
+                    );
                 }
                 // Clean up everything on failure
                 if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
@@ -332,7 +333,7 @@ impl VmManager {
             mac_addr,
             port_forwards: vec![],
             created_at_epoch: now_epoch,
-            numa_node: Some(placement.node),
+            numa_node: config.numa_node,
         };
         if let Err(e) = persistence::save_vm(&self.state_dir, &vm_id, &persisted) {
             warn!(vm_id = %vm_id, error = %e, "failed to persist VM state (VM is running but not recoverable)");
@@ -396,7 +397,12 @@ impl VmManager {
         // Release NUMA allocation
         if let Some(node) = handle.numa_node {
             let mut numa = self.numa.lock().await;
-            numa.release(node, handle.config.vcpus, handle.config.memory_mb);
+            numa.release(
+                node,
+                handle.config.vcpus,
+                handle.config.memory_mb,
+                handle.config.hugepage_size.unwrap_or(HugePageSize::Size2M),
+            );
         }
 
         // Remove port forwards for this VM
@@ -590,11 +596,8 @@ impl VmManager {
                 Err(_) => (None, VmState::Stopped),
             };
 
-            // Restore NUMA allocation only for running VMs — stopped VMs
-            // have no QEMU process and aren't consuming hugepages or CPUs.
-            if state == VmState::Running
-                && let Some(node) = pvm.numa_node
-            {
+            // Restore NUMA allocation
+            if let Some(node) = pvm.numa_node {
                 let mut numa = self.numa.lock().await;
                 let _ = numa
                     .allocate(pvm.config.vcpus, pvm.config.memory_mb, Some(node))

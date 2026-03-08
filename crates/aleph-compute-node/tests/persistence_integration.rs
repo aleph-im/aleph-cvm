@@ -29,6 +29,7 @@ fn test_persistence_roundtrip_multiple_vms() {
                 },
                 encrypted: false,
                 numa_node: None,
+                hugepage_size: None,
             },
             ip: Ipv4Addr::new(10, 0, 100, i + 1),
             ipv6: None,
