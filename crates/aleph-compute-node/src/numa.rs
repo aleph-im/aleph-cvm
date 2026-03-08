@@ -411,6 +411,7 @@ mod tests {
     }
 
     /// Helper: build a 2-node topology with full control over all fields.
+    #[allow(clippy::too_many_arguments)]
     fn two_node_topology_full(
         cpus0: BTreeSet<u32>,
         hp_2m_0: u32,
