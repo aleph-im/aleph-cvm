@@ -1,6 +1,3 @@
-mod adapter;
-mod aleph;
-
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,17 +6,17 @@ use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use anyhow::Context;
 use clap::Parser;
 use tokio::sync::RwLock;
-use tonic::transport::{Channel, Endpoint, Uri};
-use tower::service_fn;
+use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
 use aleph_compute_proto::compute::compute_node_client::ComputeNodeClient;
 use aleph_compute_proto::compute::{DeleteVmRequest, HealthRequest, ListVmsRequest};
 
-use crate::adapter::AdapterConfig;
-use crate::aleph::allocations::{self, Allocation};
-use crate::aleph::messages::{ExecutableMessage, ItemHash};
-use crate::aleph::volumes::VolumeCache;
+use aleph_scheduler_agent::adapter::{self, AdapterConfig};
+use aleph_scheduler_agent::aleph::allocations::{self, Allocation};
+use aleph_scheduler_agent::aleph::messages::{ExecutableMessage, ItemHash};
+use aleph_scheduler_agent::aleph::volumes::VolumeCache;
+use aleph_scheduler_agent::client::connect_compute_node;
 
 #[derive(Parser)]
 #[command(name = "aleph-scheduler-agent")]
@@ -63,28 +60,6 @@ struct AppState {
     messages: RwLock<std::collections::HashMap<ItemHash, ExecutableMessage>>,
     /// Hex-encoded SHA-256 hash of the allocation auth token.
     allocation_token_hash: Option<[u8; 32]>,
-}
-
-/// Connect to the compute-node gRPC server over a Unix domain socket.
-async fn connect_compute_node(
-    socket_path: &std::path::Path,
-) -> anyhow::Result<ComputeNodeClient<Channel>> {
-    let socket_path = socket_path.to_path_buf();
-
-    // tonic requires a valid URI even for UDS; the host is ignored.
-    // Wrap tokio::net::UnixStream with hyper_util::rt::TokioIo so it
-    // implements the hyper rt::Read + rt::Write traits.
-    let channel = Endpoint::try_from("http://[::]:0")?
-        .connect_with_connector(service_fn(move |_: Uri| {
-            let path = socket_path.clone();
-            async move {
-                let stream = tokio::net::UnixStream::connect(path).await?;
-                Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-            }
-        }))
-        .await?;
-
-    Ok(ComputeNodeClient::new(channel))
 }
 
 // ─── HTTP handlers (allocation API) ─────────────────────────────────────────
