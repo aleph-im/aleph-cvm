@@ -311,8 +311,7 @@ async fn node_hash_discovery_loop(
             return;
         }
 
-        match node_hash::discover_node_hash(&client, &api_url, &owner_address, &domain_name).await
-        {
+        match node_hash::discover_node_hash(&client, &api_url, &owner_address, &domain_name).await {
             Ok(Some(discovered)) => {
                 info!(
                     node_hash = %discovered.hash,
