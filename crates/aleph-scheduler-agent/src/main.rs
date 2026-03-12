@@ -303,33 +303,29 @@ async fn node_hash_discovery_loop(
 ) {
     let client = reqwest::Client::new();
     let retry_interval = Duration::from_secs(300); // 5 minutes
-    let revalidation_interval = Duration::from_secs(3600); // 1 hour
 
     loop {
-        let current = node_hash_state.read().await.clone();
+        // Stop once we have a hash — it won't change.
+        if node_hash_state.read().await.is_some() {
+            info!("node hash resolved, stopping auto-discovery");
+            return;
+        }
 
-        match node_hash::discover_node_hash(&client, &api_url, &owner_address, &domain_name).await {
+        match node_hash::discover_node_hash(&client, &api_url, &owner_address, &domain_name).await
+        {
             Ok(Some(discovered)) => {
-                if current.as_deref() != Some(&discovered.hash) {
-                    info!(
-                        node_hash = %discovered.hash,
-                        name = %discovered.name,
-                        "node hash discovered/updated"
-                    );
-                    if let Err(e) = node_hash::write_cached_hash(&state_dir, &discovered.hash) {
-                        warn!(error = %e, "failed to cache node hash");
-                    }
-                    *node_hash_state.write().await = Some(discovered.hash);
+                info!(
+                    node_hash = %discovered.hash,
+                    name = %discovered.name,
+                    "discovered node hash"
+                );
+                if let Err(e) = node_hash::write_cached_hash(&state_dir, &discovered.hash) {
+                    warn!(error = %e, "failed to cache node hash");
                 }
-                tokio::time::sleep(revalidation_interval).await;
+                *node_hash_state.write().await = Some(discovered.hash);
+                return;
             }
             Ok(None) => {
-                if current.is_some() {
-                    warn!("node hash no longer discoverable, clearing");
-                    *node_hash_state.write().await = None;
-                    let cache_path = state_dir.join("node-hash");
-                    let _ = std::fs::remove_file(&cache_path);
-                }
                 tokio::time::sleep(retry_interval).await;
             }
             Err(e) => {
