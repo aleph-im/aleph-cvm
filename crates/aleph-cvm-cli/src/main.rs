@@ -216,7 +216,8 @@ async fn main() -> Result<()> {
             let host_data_bytes = if host_data.is_empty() {
                 vec![]
             } else {
-                hex::decode(&host_data).context("--host-data must be valid hex (64 hex chars = 32 bytes)")?
+                hex::decode(&host_data)
+                    .context("--host-data must be valid hex (64 hex chars = 32 bytes)")?
             };
 
             let tee = tee_backend.map(|backend| TeeConfig {

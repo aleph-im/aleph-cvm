@@ -122,8 +122,7 @@ async fn main() -> Result<()> {
                 anyhow::bail!("at least one --secret key=value is required");
             }
 
-            let sk_bytes =
-                hex::decode(&signing_key).context("--signing-key must be valid hex")?;
+            let sk_bytes = hex::decode(&signing_key).context("--signing-key must be valid hex")?;
 
             println!(
                 "Injecting {} secret(s) into {}...",

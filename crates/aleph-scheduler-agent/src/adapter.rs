@@ -125,6 +125,7 @@ pub async fn translate_message(
             } else {
                 String::new()
             },
+            host_data: vec![],
         })
     } else {
         None
