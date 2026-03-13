@@ -95,7 +95,8 @@ fn detect_default_interface() -> Option<String> {
 /// Parse a human-readable size string into megabytes.
 /// Accepts: "4G", "4GB", "4096M", "4096MB", "4096" (plain MB).
 fn parse_size_mb(s: &str) -> Result<u32, String> {
-    let s = s.trim();
+    let s = s.trim().to_uppercase();
+    let s = s.as_str();
     if let Some(gb) = s.strip_suffix('G').or_else(|| s.strip_suffix("GB")) {
         gb.trim()
             .parse::<u32>()
@@ -228,6 +229,10 @@ mod tests {
         assert_eq!(parse_size_mb("4096MB").unwrap(), 4096);
         assert_eq!(parse_size_mb("4096").unwrap(), 4096);
         assert_eq!(parse_size_mb(" 4G ").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4g").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4gb").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096m").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096mb").unwrap(), 4096);
     }
 
     #[test]
