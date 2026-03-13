@@ -42,7 +42,7 @@ pem = "3"
 
 # Aleph SDK
 aleph-sdk = { version = "0.7.1" }
-aleph-types = { version = "0.7.1" }
+aleph-types = { version = "0.7.1", default-features = false }
 url = "2"
 
 # HTTP
