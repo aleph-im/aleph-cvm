@@ -41,8 +41,8 @@ hex = "0.4"
 pem = "3"
 
 # Aleph SDK
-aleph-sdk = { path = "../aleph-rs/crates/aleph-sdk" }
-aleph-types = { path = "../aleph-rs/crates/aleph-types" }
+aleph-sdk = { version = "0.7.1" }
+aleph-types = { version = "0.7.1" }
 url = "2"
 
 # HTTP

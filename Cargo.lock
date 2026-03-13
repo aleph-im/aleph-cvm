@@ -362,6 +362,8 @@ dependencies = [
 [[package]]
 name = "aleph-sdk"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed974ba098cc6c262dcdc99804b283ed400b22cf09be31abd47a11451f3f6b38"
 dependencies = [
  "aleph-types",
  "async-trait",
@@ -417,6 +419,8 @@ dependencies = [
 [[package]]
 name = "aleph-types"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfb51f6e3638e17f56858c30c6b7ef7f163064d1875970932c8c86444a38ecda"
 dependencies = [
  "bs58",
  "chrono",
