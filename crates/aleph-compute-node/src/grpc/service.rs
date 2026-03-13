@@ -169,7 +169,22 @@ fn parse_tee_config(
     } else {
         Some(proto.policy)
     };
-    Ok(TeeConfig { backend, policy, host_data: None })
+    let host_data = if proto.host_data.is_empty() {
+        None
+    } else {
+        let bytes: [u8; 32] = proto.host_data.try_into().map_err(|v: Vec<u8>| {
+            Status::invalid_argument(format!(
+                "host_data must be exactly 32 bytes, got {}",
+                v.len()
+            ))
+        })?;
+        Some(bytes)
+    };
+    Ok(TeeConfig {
+        backend,
+        policy,
+        host_data,
+    })
 }
 
 fn vm_info_to_proto(info: &crate::vm::VmInfo) -> VmInfo {

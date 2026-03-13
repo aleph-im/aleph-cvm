@@ -38,6 +38,7 @@ message DiskConfig {
 message TeeConfig {
   string backend = 1; // "sev-snp", "tdx", "nvidia-cc"
   string policy = 2;  // empty string means default
+  bytes host_data = 3; // 32 bytes: SHA-256(owner_pubkey), set by orchestrator
 }
 
 message VmInfo {

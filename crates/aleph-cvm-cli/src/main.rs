@@ -75,6 +75,10 @@ enum Command {
         /// NUMA node hint (0 = auto, 1+ = specific node).
         #[arg(long, default_value_t = 0)]
         numa_node: u32,
+
+        /// Hex-encoded SHA-256(owner_pubkey) for HOSTDATA owner binding (32 bytes).
+        #[arg(long, default_value = "")]
+        host_data: String,
     },
 
     /// Get information about a VM.
@@ -204,13 +208,21 @@ async fn main() -> Result<()> {
             ipv6_prefix_len,
             encrypted,
             numa_node,
+            host_data,
         } => {
             let disks: Vec<DiskConfig> =
                 disk.iter().map(|s| parse_disk(s)).collect::<Result<_>>()?;
 
+            let host_data_bytes = if host_data.is_empty() {
+                vec![]
+            } else {
+                hex::decode(&host_data).context("--host-data must be valid hex (64 hex chars = 32 bytes)")?
+            };
+
             let tee = tee_backend.map(|backend| TeeConfig {
                 backend,
                 policy: String::new(),
+                host_data: host_data_bytes.clone(),
             });
 
             let resp = client

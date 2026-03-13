@@ -27,3 +27,6 @@ serde_json.workspace = true
 
 # Errors
 anyhow.workspace = true
+
+# Encoding
+hex.workspace = true
