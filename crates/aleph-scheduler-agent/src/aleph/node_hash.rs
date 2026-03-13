@@ -262,29 +262,25 @@ mod tests {
     }
 
     impl AlephPostClient for MockPostClient {
-        fn get_posts_v0(
+        async fn get_posts_v0(
             &self,
             _filter: &PostFilter,
-        ) -> impl std::future::Future<Output = Result<GetPostsV0Response, MessageError>> + Send
-        {
+        ) -> Result<GetPostsV0Response, MessageError> {
             let posts = self.posts.clone();
             let total = posts.len() as u32;
-            async move {
-                Ok(GetPostsV0Response {
-                    posts,
-                    pagination_per_page: 200,
-                    pagination_page: 1,
-                    pagination_total: total,
-                })
-            }
+            Ok(GetPostsV0Response {
+                posts,
+                pagination_per_page: 200,
+                pagination_page: 1,
+                pagination_total: total,
+            })
         }
 
-        fn get_posts_v1(
+        async fn get_posts_v1(
             &self,
             _filter: &PostFilter,
-        ) -> impl std::future::Future<Output = Result<GetPostsV1Response, MessageError>> + Send
-        {
-            async { unimplemented!("v1 not used") }
+        ) -> Result<GetPostsV1Response, MessageError> {
+            unimplemented!("v1 not used")
         }
     }
 
