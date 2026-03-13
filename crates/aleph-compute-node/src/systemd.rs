@@ -19,6 +19,7 @@ pub fn start_vm_unit(
     run_dir: &std::path::Path,
     rw_dirs: &[&std::path::Path],
     numa_cpuset: Option<&str>,
+    needs_sev_devices: bool,
 ) -> Result<()> {
     let unit = unit_name(vm_id);
     let (program, args) = qemu_args.split_first().context("empty qemu args")?;
@@ -73,16 +74,21 @@ pub fn start_vm_unit(
         "--property",
         "DeviceAllow=/dev/kvm rw",
         "--property",
-        "DeviceAllow=/dev/sev-guest rw",
-        "--property",
-        "DeviceAllow=/dev/sev rw",
-        "--property",
         "DeviceAllow=/dev/null rw",
         "--property",
         "DeviceAllow=/dev/urandom r",
         "--property",
         "DeviceAllow=/dev/net/tun rw",
     ]);
+
+    if needs_sev_devices {
+        cmd.args([
+            "--property",
+            "DeviceAllow=/dev/sev-guest rw",
+            "--property",
+            "DeviceAllow=/dev/sev rw",
+        ]);
+    }
 
     if let Some(cpuset) = numa_cpuset {
         cmd.args(["--property", &format!("AllowedCPUs={cpuset}")]);

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,7 +8,10 @@ use clap::Parser;
 use ipnet::Ipv6Net;
 use tracing::info;
 
+use aleph_tee::none::NoTeeBackend;
 use aleph_tee::sev_snp::SevSnpBackend;
+use aleph_tee::traits::TeeBackend;
+use aleph_tee::types::TeeType;
 
 use aleph_compute_node::grpc::ComputeNodeServer;
 use aleph_compute_node::network;
@@ -151,12 +155,15 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to ensure bridge")?;
 
-    // Create the TEE backend
-    let mut backend = SevSnpBackend::new(&cli.amd_product);
+    // Create TEE backends
+    let mut sev_backend = SevSnpBackend::new(&cli.amd_product);
     if let Some(ref path) = cli.ovmf_path {
-        backend = backend.with_ovmf_path(path);
+        sev_backend = sev_backend.with_ovmf_path(path);
     }
-    let tee_backend = Arc::new(backend);
+
+    let mut backends: HashMap<TeeType, Arc<dyn TeeBackend>> = HashMap::new();
+    backends.insert(TeeType::SevSnp, Arc::new(sev_backend));
+    backends.insert(TeeType::None, Arc::new(NoTeeBackend));
 
     // Enable IPv6 forwarding if pool is configured
     if cli.ipv6_pool.is_some() {
@@ -188,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
         cli.state_dir.clone(),
         cli.bridge,
         cli.gateway_ip,
-        tee_backend,
+        backends,
         cli.dhcp_hostsdir,
         external_interface,
         cli.ipv6_pool,

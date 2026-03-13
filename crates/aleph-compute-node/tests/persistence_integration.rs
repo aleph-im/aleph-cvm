@@ -18,8 +18,8 @@ fn test_persistence_roundtrip_multiple_vms() {
         let vm = PersistedVm {
             config: VmConfig {
                 vm_id: format!("vm-{i:03}"),
-                kernel: PathBuf::from("/boot/vmlinuz"),
-                initrd: PathBuf::from("/boot/initrd.img"),
+                kernel: Some(PathBuf::from("/boot/vmlinuz")),
+                initrd: Some(PathBuf::from("/boot/initrd.img")),
                 disks: vec![],
                 vcpus: 2,
                 memory_mb: 1024,

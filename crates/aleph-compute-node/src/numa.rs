@@ -168,14 +168,19 @@ impl NumaAllocator {
     /// Otherwise, nodes are tried in order (0, 1, 2, …) and the first one
     /// with enough free CPUs and memory is selected.
     ///
-    /// Page-size selection:
+    /// Page-size selection (when `uses_hugepages` is `true`):
     /// - If `memory_mb` is a multiple of 1024, try 1G pages first.
     /// - If 1G pages don't fit (or memory isn't 1G-aligned), use 2M pages.
+    ///
+    /// When `uses_hugepages` is `false`, the hugepage memory capacity check
+    /// is skipped and memory is not tracked (non-confidential VMs don't
+    /// consume hugepages).
     pub fn allocate(
         &mut self,
         vcpus: u32,
         memory_mb: u32,
         hint: Option<u32>,
+        uses_hugepages: bool,
     ) -> Result<NumaPlacement> {
         let candidates: Vec<usize> = if let Some(node_id) = hint {
             let idx = self.topology.nodes.iter().position(|n| n.id == node_id);
@@ -193,6 +198,16 @@ impl NumaAllocator {
 
             if vcpus > available_cpus {
                 continue;
+            }
+
+            if !uses_hugepages {
+                // Non-confidential VMs: skip hugepage accounting.
+                self.allocated_vcpus[idx] += vcpus;
+                return Ok(NumaPlacement {
+                    node: node.id,
+                    cpuset: format_cpuset(&node.cpus),
+                    hugepage_size: HugePageSize::Size2M,
+                });
             }
 
             // Try 1G pages first if memory is 1G-aligned.
@@ -473,11 +488,11 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // 2 vCPUs fits on node 0 (4 available).
-        let p = alloc.allocate(2, 256, None).unwrap();
+        let p = alloc.allocate(2, 256, None, true).unwrap();
         assert_eq!(p.node, 0);
 
         // 4 vCPUs does NOT fit on node 0 (only 2 left), should go to node 1.
-        let p = alloc.allocate(4, 256, None).unwrap();
+        let p = alloc.allocate(4, 256, None, true).unwrap();
         assert_eq!(p.node, 1);
     }
 
@@ -492,7 +507,7 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Hint node 1 even though node 0 has room.
-        let p = alloc.allocate(2, 256, Some(1)).unwrap();
+        let p = alloc.allocate(2, 256, Some(1), true).unwrap();
         assert_eq!(p.node, 1);
     }
 
@@ -507,11 +522,11 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Fill both nodes (4 vCPUs each).
-        alloc.allocate(4, 256, None).unwrap();
-        alloc.allocate(4, 256, None).unwrap();
+        alloc.allocate(4, 256, None, true).unwrap();
+        alloc.allocate(4, 256, None, true).unwrap();
 
         // Next allocation should fail.
-        assert!(alloc.allocate(1, 64, None).is_err());
+        assert!(alloc.allocate(1, 64, None, true).is_err());
     }
 
     #[test]
@@ -525,17 +540,17 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Fill node 0.
-        alloc.allocate(4, 1024, None).unwrap();
+        alloc.allocate(4, 1024, None, true).unwrap();
 
         // Node 0 is full; next would go to node 1.
-        let p = alloc.allocate(1, 64, None).unwrap();
+        let p = alloc.allocate(1, 64, None, true).unwrap();
         assert_eq!(p.node, 1);
 
         // Release node 0.
         alloc.release(0, 4, 1024, HugePageSize::Size2M);
 
         // Now node 0 has room again.
-        let p = alloc.allocate(1, 64, None).unwrap();
+        let p = alloc.allocate(1, 64, None, true).unwrap();
         assert_eq!(p.node, 0);
     }
 
@@ -550,7 +565,25 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Request 600 MB — each node only has 512 MB.
-        assert!(alloc.allocate(1, 600, None).is_err());
+        assert!(alloc.allocate(1, 600, None, true).is_err());
+    }
+
+    #[test]
+    fn test_allocator_no_hugepage_check() {
+        let topo = two_node_topology(
+            BTreeSet::from([0, 1, 2, 3]),
+            0, // zero hugepages
+            BTreeSet::from([4, 5, 6, 7]),
+            0,
+        );
+        let mut alloc = NumaAllocator::new(topo);
+
+        // With uses_hugepages=true, should fail (0 hugepages available)
+        assert!(alloc.allocate(1, 1024, None, true).is_err());
+
+        // With uses_hugepages=false, should succeed (memory check skipped)
+        let p = alloc.allocate(1, 1024, None, false).unwrap();
+        assert_eq!(p.node, 0);
     }
 
     #[test]
@@ -635,7 +668,7 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // 2048 MB = 2 x 1024, fits in 2 x 1G pages
-        let p = alloc.allocate(2, 2048, None).unwrap();
+        let p = alloc.allocate(2, 2048, None, true).unwrap();
         assert_eq!(p.node, 0);
         assert_eq!(p.hugepage_size, HugePageSize::Size1G);
     }
@@ -655,7 +688,7 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // 1500 MB is not a multiple of 1024 -> must use 2M
-        let p = alloc.allocate(2, 1500, None).unwrap();
+        let p = alloc.allocate(2, 1500, None, true).unwrap();
         assert_eq!(p.hugepage_size, HugePageSize::Size2M);
     }
 
@@ -674,11 +707,11 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Use up all 1G pages on node 0 (2 pages = 2048 MB)
-        let p = alloc.allocate(1, 2048, None).unwrap();
+        let p = alloc.allocate(1, 2048, None, true).unwrap();
         assert_eq!(p.hugepage_size, HugePageSize::Size1G);
 
         // Next 1G-aligned request should fall back to 2M (no 1G pages left)
-        let p = alloc.allocate(1, 2048, None).unwrap();
+        let p = alloc.allocate(1, 2048, None, true).unwrap();
         assert_eq!(p.node, 0); // still fits on node 0 via 2M pages
         assert_eq!(p.hugepage_size, HugePageSize::Size2M);
     }
@@ -698,13 +731,13 @@ mod tests {
         let mut alloc = NumaAllocator::new(topo);
 
         // Use all 1G pages
-        alloc.allocate(1, 2048, None).unwrap();
+        alloc.allocate(1, 2048, None, true).unwrap();
 
         // Release them
         alloc.release(0, 1, 2048, HugePageSize::Size1G);
 
         // Should be able to allocate 1G again
-        let p = alloc.allocate(1, 2048, None).unwrap();
+        let p = alloc.allocate(1, 2048, None, true).unwrap();
         assert_eq!(p.hugepage_size, HugePageSize::Size1G);
     }
 }

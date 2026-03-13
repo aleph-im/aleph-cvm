@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,13 +54,14 @@ impl TeeBackend for MockTeeBackend {
 
 /// Create a VmManager backed by the mock TEE backend.
 fn mock_manager() -> Arc<VmManager> {
-    let backend: Arc<dyn TeeBackend> = Arc::new(MockTeeBackend);
+    let mut backends: HashMap<TeeType, Arc<dyn TeeBackend>> = HashMap::new();
+    backends.insert(TeeType::SevSnp, Arc::new(MockTeeBackend));
     Arc::new(VmManager::new(
         PathBuf::from("/tmp/aleph-cvm-test"),
         PathBuf::from("/tmp/aleph-cvm-test/state"),
         "br-test".to_string(),
         Ipv4Addr::new(10, 0, 200, 1),
-        backend,
+        backends,
         None,
         "eth0".to_string(),
         None,  // ipv6_pool

@@ -16,7 +16,7 @@ use aleph_network::ndp_proxy::NdpProxy;
 use aleph_network::nftables::NftablesManager;
 use aleph_network::types::{PortForward, Protocol};
 use aleph_tee::traits::TeeBackend;
-use aleph_tee::types::{HugePageSize, VmConfig};
+use aleph_tee::types::{HugePageSize, TeeType, VmConfig};
 
 use crate::network;
 use crate::numa::{NumaAllocator, NumaTopology};
@@ -70,7 +70,7 @@ impl VmInfo {
     }
 }
 
-/// Manages the lifecycle of confidential VMs.
+/// Manages the lifecycle of VMs (both confidential and non-confidential).
 pub struct VmManager {
     vms: RwLock<HashMap<String, VmHandle>>,
     run_dir: PathBuf,
@@ -79,7 +79,7 @@ pub struct VmManager {
     gateway_ip: Ipv4Addr,
     /// Tracks used IP offsets from the gateway. Offsets are reclaimed on VM deletion.
     used_ip_offsets: RwLock<BTreeSet<u8>>,
-    tee_backend: Arc<dyn TeeBackend>,
+    backends: HashMap<TeeType, Arc<dyn TeeBackend>>,
     dhcp_hostsdir: Option<PathBuf>,
     nftables: NftablesManager,
     port_forwards: Mutex<PortForwardState>,
@@ -102,7 +102,7 @@ impl VmManager {
         state_dir: PathBuf,
         bridge: String,
         gateway_ip: Ipv4Addr,
-        tee_backend: Arc<dyn TeeBackend>,
+        backends: HashMap<TeeType, Arc<dyn TeeBackend>>,
         dhcp_hostsdir: Option<PathBuf>,
         external_interface: String,
         ipv6_pool: Option<Ipv6Net>,
@@ -127,7 +127,7 @@ impl VmManager {
             bridge,
             gateway_ip,
             used_ip_offsets: RwLock::new(BTreeSet::new()),
-            tee_backend,
+            backends,
             dhcp_hostsdir,
             nftables,
             port_forwards: Mutex::new(PortForwardState::new()),
@@ -135,6 +135,13 @@ impl VmManager {
             ndp_proxy,
             numa: Mutex::new(NumaAllocator::new(numa_topology)),
         }
+    }
+
+    fn get_backend(&self, tee_type: TeeType) -> Result<&dyn TeeBackend> {
+        self.backends
+            .get(&tee_type)
+            .map(|b| b.as_ref())
+            .with_context(|| format!("no backend registered for TEE type: {tee_type:?}"))
     }
 
     /// Initialize nftables supervisor chains. Call once at startup.
@@ -235,17 +242,24 @@ impl VmManager {
             ndp.add_range(&tap_name, *ipv6).await;
         }
 
+        // Determine if this is a confidential VM
+        let tee_backend = self.get_backend(config.tee.backend)?;
+        let is_confidential = config.tee.backend != TeeType::None;
+
         // Compute dm-verity for rootfs (first disk) and optional workload volume
-        // (second disk), or skip if LUKS encrypted.
+        // (second disk), or skip if LUKS encrypted or non-confidential.
         //
         // Disk layout after verity insertion:
         //   1 disk:  [rootfs, hashtree]                      → vda, vdb
         //   2 disks: [rootfs, hashtree, workload, hashtree]  → vda, vdb, vdc, vdd
         let encrypted = config.encrypted;
-        let kernel_cmdline = if encrypted {
+        let kernel_cmdline = if !is_confidential {
+            // Non-confidential: no kernel cmdline (disk boot)
+            None
+        } else if encrypted {
             // LUKS mode: skip dm-verity, user will inject key via attest-agent.
             info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
-            verity::build_kernel_cmdline(None, None, true)
+            Some(verity::build_kernel_cmdline(None, None, true))
         } else if let Some(rootfs_disk) = config.disks.first() {
             // Check for a workload volume before mutating the disk list.
             let has_workload_disk = config.disks.len() > 1;
@@ -253,7 +267,6 @@ impl VmManager {
             let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
                 "dm-verity setup failed — refusing to boot without integrity verification",
             )?;
-            // Insert hash tree as second disk (right after rootfs)
             config.disks.insert(
                 1,
                 aleph_tee::types::DiskConfig {
@@ -285,13 +298,13 @@ impl VmManager {
                 None
             };
 
-            verity::build_kernel_cmdline(
+            Some(verity::build_kernel_cmdline(
                 Some(&vinfo.root_hash),
                 workload_roothash.as_deref(),
                 false,
-            )
+            ))
         } else {
-            verity::build_kernel_cmdline(None, None, false)
+            Some(verity::build_kernel_cmdline(None, None, false))
         };
 
         // Allocate NUMA node — only set numa_node (which triggers QEMU
@@ -299,7 +312,7 @@ impl VmManager {
         // systems binding is unnecessary and may not be supported by QEMU.
         let placement = {
             let mut numa = self.numa.lock().await;
-            let p = numa.allocate(config.vcpus, config.memory_mb, numa_hint)?;
+            let p = numa.allocate(config.vcpus, config.memory_mb, numa_hint, is_confidential)?;
             if numa.num_nodes() > 1 {
                 config.numa_node = Some(p.node);
             }
@@ -314,9 +327,9 @@ impl VmManager {
             &config,
             &paths,
             &tap_name,
-            self.tee_backend.as_ref(),
+            tee_backend,
             &mac_addr,
-            &kernel_cmdline,
+            kernel_cmdline.as_deref(),
         ));
 
         // Collect parent directories of writable disks for ReadWritePaths.
@@ -334,6 +347,7 @@ impl VmManager {
             vm_id.clone(),
             &rw_dirs,
             Some(placement.cpuset.as_str()),
+            is_confidential,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -645,9 +659,15 @@ impl VmManager {
             if state == VmState::Running
                 && let Some(node) = pvm.numa_node
             {
+                let is_confidential = pvm.config.tee.backend != TeeType::None;
                 let mut numa = self.numa.lock().await;
                 let _ = numa
-                    .allocate(pvm.config.vcpus, pvm.config.memory_mb, Some(node))
+                    .allocate(
+                        pvm.config.vcpus,
+                        pvm.config.memory_mb,
+                        Some(node),
+                        is_confidential,
+                    )
                     .map_err(
                         |e| warn!(vm_id = %vm_id, error = %e, "failed to restore NUMA allocation"),
                     );

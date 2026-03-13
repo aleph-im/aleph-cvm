@@ -93,8 +93,8 @@ mod tests {
         PersistedVm {
             config: VmConfig {
                 vm_id: vm_id.to_string(),
-                kernel: PathBuf::from("/boot/vmlinuz"),
-                initrd: PathBuf::from("/boot/initrd.img"),
+                kernel: Some(PathBuf::from("/boot/vmlinuz")),
+                initrd: Some(PathBuf::from("/boot/initrd.img")),
                 disks: vec![],
                 vcpus: 2,
                 memory_mb: 1024,

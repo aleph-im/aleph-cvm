@@ -27,6 +27,7 @@ impl QemuProcess {
         vm_id: String,
         rw_dirs: &[&std::path::Path],
         numa_cpuset: Option<&str>,
+        needs_sev_devices: bool,
     ) -> Result<Self> {
         // Create the runtime directory for QMP socket, serial log, etc.
         let vm_dir = paths
@@ -42,7 +43,14 @@ impl QemuProcess {
         // Clean up any leftover failed unit from a previous run
         systemd::reset_failed_unit(&vm_id);
 
-        systemd::start_vm_unit(&vm_id, args, vm_dir, rw_dirs, numa_cpuset)?;
+        systemd::start_vm_unit(
+            &vm_id,
+            args,
+            vm_dir,
+            rw_dirs,
+            numa_cpuset,
+            needs_sev_devices,
+        )?;
 
         info!(vm_id = %vm_id, "QEMU started via systemd");
 
