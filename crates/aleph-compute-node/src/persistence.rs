@@ -101,6 +101,7 @@ mod tests {
                 tee: TeeConfig {
                     backend: TeeType::SevSnp,
                     policy: None,
+                    host_data: None,
                 },
                 encrypted: false,
                 numa_node: None,

@@ -169,7 +169,7 @@ fn parse_tee_config(
     } else {
         Some(proto.policy)
     };
-    Ok(TeeConfig { backend, policy })
+    Ok(TeeConfig { backend, policy, host_data: None })
 }
 
 fn vm_info_to_proto(info: &crate::vm::VmInfo) -> VmInfo {

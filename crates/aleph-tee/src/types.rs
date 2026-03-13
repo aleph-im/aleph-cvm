@@ -85,6 +85,42 @@ pub struct VmConfig {
 pub struct TeeConfig {
     pub backend: TeeType,
     pub policy: Option<String>,
+    /// SHA-256(owner_pubkey) — binds the VM to a specific owner via SNP HOSTDATA.
+    #[serde(default, with = "option_hex_32")]
+    pub host_data: Option<[u8; 32]>,
+}
+
+/// Serde helper for hex-encoding `Option<[u8; 32]>` fields.
+mod option_hex_32 {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(val: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match val {
+            Some(bytes) => serializer.serialize_str(&hex::encode(bytes)),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            None => Ok(None),
+            Some(s) if s.is_empty() => Ok(None),
+            Some(s) => {
+                let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                let array: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|_| serde::de::Error::custom("expected exactly 32 bytes"))?;
+                Ok(Some(array))
+            }
+        }
+    }
 }
 
 /// Serde helper for hex-encoding `Vec<u8>` fields.

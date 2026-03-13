@@ -26,6 +26,7 @@ fn test_persistence_roundtrip_multiple_vms() {
                 tee: TeeConfig {
                     backend: TeeType::SevSnp,
                     policy: Some("0x30000".to_string()),
+                    host_data: None,
                 },
                 encrypted: false,
                 numa_node: None,

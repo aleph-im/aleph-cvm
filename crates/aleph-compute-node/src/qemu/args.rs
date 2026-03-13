@@ -125,6 +125,7 @@ mod tests {
             tee: TeeConfig {
                 backend: TeeType::SevSnp,
                 policy: Some("0x30000".into()),
+                host_data: None,
             },
             encrypted: false,
             numa_node: None,

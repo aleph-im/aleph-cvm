@@ -41,6 +41,12 @@ pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
         config.memory_mb
     );
 
+    let host_data_opt = config
+        .tee
+        .host_data
+        .map(|hd| format!(",host-data={}", hex::encode(hd)))
+        .unwrap_or_default();
+
     vec![
         "-machine".to_string(),
         "q35,confidential-guest-support=sev0,memory-backend=ram1,vmport=off".to_string(),
@@ -48,7 +54,7 @@ pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
         memfd_opts,
         "-object".to_string(),
         format!(
-            "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on,policy={policy}"
+            "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on,policy={policy}{host_data_opt}"
         ),
         // Strip QEMU's default devices (USB, floppy, etc.) to reduce
         // OVMF PCI enumeration time.
@@ -75,6 +81,7 @@ mod tests {
             tee: TeeConfig {
                 backend: TeeType::SevSnp,
                 policy: policy.map(|s| s.to_string()),
+                host_data: None,
             },
             encrypted: false,
             numa_node: None,
@@ -219,6 +226,40 @@ mod tests {
         assert!(
             mem_arg.contains("hugetlbsize=1G"),
             "should use 1G hugepages but got: {mem_arg}"
+        );
+    }
+
+    #[test]
+    fn test_sev_snp_args_with_host_data() {
+        let mut config = make_config(2048, None);
+        config.tee.host_data = Some([0xAB; 32]);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let sev_arg = args
+            .iter()
+            .find(|a| a.contains("sev-snp-guest"))
+            .expect("should have sev-snp-guest arg");
+
+        let expected_hex = hex::encode([0xAB; 32]);
+        assert!(
+            sev_arg.contains(&format!("host-data={expected_hex}")),
+            "should contain host-data but got: {sev_arg}"
+        );
+    }
+
+    #[test]
+    fn test_sev_snp_args_without_host_data() {
+        let config = make_config(2048, None);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let sev_arg = args
+            .iter()
+            .find(|a| a.contains("sev-snp-guest"))
+            .expect("should have sev-snp-guest arg");
+
+        assert!(
+            !sev_arg.contains("host-data"),
+            "should NOT have host-data when None: {sev_arg}"
         );
     }
 
