@@ -78,18 +78,30 @@ pub fn ensure_verity(rootfs_path: &Path) -> Result<VerityInfo> {
     })
 }
 
-/// Build the kernel command line, optionally including a dm-verity root hash.
+/// Build the kernel command line, optionally including dm-verity root hashes.
 ///
 /// If `encrypted` is true, emits `luks=1` instead of any verity/root parameters
 /// (the init script will prompt for a key via attest-agent).
-pub fn build_kernel_cmdline(roothash: Option<&str>, encrypted: bool) -> String {
+///
+/// If `workload_roothash` is provided, appends `workload_roothash=<hash>` to the
+/// cmdline. The init script will use this to set up dm-verity for a second volume
+/// pair (e.g., a Docker Compose workload volume on vdc+vdd).
+pub fn build_kernel_cmdline(
+    roothash: Option<&str>,
+    workload_roothash: Option<&str>,
+    encrypted: bool,
+) -> String {
     if encrypted {
         "console=ttyS0 luks=1".to_string()
     } else {
-        match roothash {
+        let mut cmdline = match roothash {
             Some(hash) => format!("console=ttyS0 root=/dev/mapper/verity-root ro roothash={hash}"),
             None => "console=ttyS0 root=/dev/vda ro".to_string(),
+        };
+        if let Some(hash) = workload_roothash {
+            cmdline.push_str(&format!(" workload_roothash={hash}"));
         }
+        cmdline
     }
 }
 
@@ -99,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_build_kernel_cmdline_no_verity() {
-        let cmdline = build_kernel_cmdline(None, false);
+        let cmdline = build_kernel_cmdline(None, None, false);
         assert_eq!(cmdline, "console=ttyS0 root=/dev/vda ro");
         assert!(!cmdline.contains("roothash"));
         assert!(!cmdline.contains("verity-root"));
@@ -108,7 +120,7 @@ mod tests {
     #[test]
     fn test_build_kernel_cmdline_with_verity() {
         let hash = "abc123def456";
-        let cmdline = build_kernel_cmdline(Some(hash), false);
+        let cmdline = build_kernel_cmdline(Some(hash), None, false);
         assert_eq!(
             cmdline,
             "console=ttyS0 root=/dev/mapper/verity-root ro roothash=abc123def456"
@@ -120,15 +132,15 @@ mod tests {
 
     #[test]
     fn test_build_kernel_cmdline_no_ip() {
-        let none = build_kernel_cmdline(None, false);
-        let some = build_kernel_cmdline(Some("aabbccdd"), false);
+        let none = build_kernel_cmdline(None, None, false);
+        let some = build_kernel_cmdline(Some("aabbccdd"), None, false);
         assert!(!none.contains("ip="));
         assert!(!some.contains("ip="));
     }
 
     #[test]
     fn test_build_kernel_cmdline_luks() {
-        let cmdline = build_kernel_cmdline(None, true);
+        let cmdline = build_kernel_cmdline(None, None, true);
         assert_eq!(cmdline, "console=ttyS0 luks=1");
         assert!(!cmdline.contains("roothash"));
         assert!(!cmdline.contains("verity-root"));
@@ -136,7 +148,31 @@ mod tests {
 
     #[test]
     fn test_build_kernel_cmdline_luks_ignores_roothash() {
-        let cmdline = build_kernel_cmdline(Some("abc123"), true);
+        let cmdline = build_kernel_cmdline(Some("abc123"), None, true);
+        assert_eq!(cmdline, "console=ttyS0 luks=1");
+    }
+
+    #[test]
+    fn test_build_kernel_cmdline_with_workload_roothash() {
+        let cmdline = build_kernel_cmdline(Some("aabb"), Some("ccdd"), false);
+        assert_eq!(
+            cmdline,
+            "console=ttyS0 root=/dev/mapper/verity-root ro roothash=aabb workload_roothash=ccdd"
+        );
+    }
+
+    #[test]
+    fn test_build_kernel_cmdline_workload_without_rootfs_verity() {
+        let cmdline = build_kernel_cmdline(None, Some("ccdd"), false);
+        assert_eq!(
+            cmdline,
+            "console=ttyS0 root=/dev/vda ro workload_roothash=ccdd"
+        );
+    }
+
+    #[test]
+    fn test_build_kernel_cmdline_luks_ignores_workload_roothash() {
+        let cmdline = build_kernel_cmdline(Some("aabb"), Some("ccdd"), true);
         assert_eq!(cmdline, "console=ttyS0 luks=1");
     }
 }

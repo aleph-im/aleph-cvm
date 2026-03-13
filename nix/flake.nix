@@ -94,7 +94,94 @@
         rootfs = pkgs.callPackage ./rootfs.nix {
           inherit fib-service;
         };
-        compose-rootfs = pkgs.callPackage ./compose-rootfs.nix {};
+        compose-rootfs = pkgs.callPackage ./compose-rootfs.nix {
+          kernel = self.packages.${system}.kernel;
+        };
+
+        # OCI image of fib-service for Docker Compose demo.
+        fib-service-image = pkgs.dockerTools.buildImage {
+          name = "fib-service";
+          tag = "latest";
+          copyToRoot = pkgs.buildEnv {
+            name = "fib-service-root";
+            paths = [ fib-service ];
+            pathsToLink = [ "/bin" ];
+          };
+          config.Cmd = [ "${fib-service}/bin/fib-service" ];
+        };
+
+        # Workload volume: compose.yml + OCI image tarballs → ext4.
+        compose-workload = pkgs.runCommand "compose-workload.ext4" {
+          nativeBuildInputs = [ pkgs.e2fsprogs ];
+        } ''
+          mkdir -p workload/images
+          cp ${./compose-demo/docker-compose.yml} workload/docker-compose.yml
+          cp ${self.packages.${system}.fib-service-image} workload/images/fib-service.tar
+          size=$(du -sm workload | cut -f1)
+          size=$((size + 10))
+          truncate -s ''${size}M $out
+          mkfs.ext4 -b 4096 -d workload $out
+        '';
+
+        # dm-verity for the compose-runner rootfs.
+        compose-rootfs-verity = pkgs.runCommand "compose-rootfs-verity" {
+          nativeBuildInputs = [ pkgs.cryptsetup ];
+        } ''
+          mkdir -p $out
+          veritysetup format \
+            ${self.packages.${system}.compose-rootfs} \
+            $out/hashtree \
+            | tee /dev/stderr \
+            | grep "Root hash:" \
+            | awk '{print $NF}' \
+            | tr -d '\n' > $out/roothash
+        '';
+
+        # dm-verity for the workload volume.
+        compose-workload-verity = pkgs.runCommand "compose-workload-verity" {
+          nativeBuildInputs = [ pkgs.cryptsetup ];
+        } ''
+          mkdir -p $out
+          veritysetup format \
+            ${self.packages.${system}.compose-workload} \
+            $out/hashtree \
+            | tee /dev/stderr \
+            | grep "Root hash:" \
+            | awk '{print $NF}' \
+            | tr -d '\n' > $out/roothash
+        '';
+
+        # Convenience: all compose demo artifacts in one directory.
+        vm-compose-demo = let
+          runnerRoothash = builtins.readFile "${self.packages.${system}.compose-rootfs-verity}/roothash";
+          workloadRoothash = builtins.readFile "${self.packages.${system}.compose-workload-verity}/roothash";
+          composeCmdline = "console=ttyS0 root=/dev/mapper/verity-root ro roothash=${runnerRoothash} workload_roothash=${workloadRoothash}";
+          composeMeasurement = pkgs.runCommand "compose-measurement-2vcpus-EPYC-v4" {
+            nativeBuildInputs = [ sev-snp-measure ];
+          } ''
+            sev-snp-measure \
+              --mode snp \
+              --vcpus 2 \
+              --vcpu-type EPYC-v4 \
+              --ovmf ${ovmfFd} \
+              --kernel ${self.packages.${system}.kernel}/bzImage \
+              --initrd ${self.packages.${system}.initrd}/initrd \
+              --append "${composeCmdline}" \
+              | tr -d '\n' > $out
+          '';
+        in pkgs.runCommand "vm-compose-demo" {} ''
+          mkdir -p $out
+          ln -s ${self.packages.${system}.kernel}/bzImage $out/bzImage
+          ln -s ${self.packages.${system}.initrd}/initrd $out/initrd
+          ln -s ${self.packages.${system}.compose-rootfs} $out/rootfs.ext4
+          ln -s ${self.packages.${system}.compose-workload} $out/workload.ext4
+          cp ${ovmfFd} $out/OVMF.fd
+          cp ${composeMeasurement} $out/measurement.hex
+          cp ${self.packages.${system}.compose-rootfs-verity}/hashtree $out/rootfs.ext4.verity
+          cp ${self.packages.${system}.compose-rootfs-verity}/roothash $out/rootfs.ext4.roothash
+          cp ${self.packages.${system}.compose-workload-verity}/hashtree $out/workload.ext4.verity
+          cp ${self.packages.${system}.compose-workload-verity}/roothash $out/workload.ext4.roothash
+        '';
 
         # Compute dm-verity hash tree and root hash for the demo rootfs.
         # The root hash is embedded in the kernel cmdline, binding rootfs

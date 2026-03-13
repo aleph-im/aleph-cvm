@@ -235,13 +235,21 @@ impl VmManager {
             ndp.add_range(&tap_name, *ipv6).await;
         }
 
-        // Compute dm-verity for the rootfs (first disk), or skip if LUKS encrypted
+        // Compute dm-verity for rootfs (first disk) and optional workload volume
+        // (second disk), or skip if LUKS encrypted.
+        //
+        // Disk layout after verity insertion:
+        //   1 disk:  [rootfs, hashtree]                      → vda, vdb
+        //   2 disks: [rootfs, hashtree, workload, hashtree]  → vda, vdb, vdc, vdd
         let encrypted = config.encrypted;
         let kernel_cmdline = if encrypted {
             // LUKS mode: skip dm-verity, user will inject key via attest-agent.
             info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
-            verity::build_kernel_cmdline(None, true)
+            verity::build_kernel_cmdline(None, None, true)
         } else if let Some(rootfs_disk) = config.disks.first() {
+            // Check for a workload volume before mutating the disk list.
+            let has_workload_disk = config.disks.len() > 1;
+
             let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
                 "dm-verity setup failed — refusing to boot without integrity verification",
             )?;
@@ -254,9 +262,36 @@ impl VmManager {
                     format: "raw".to_string(),
                 },
             );
-            verity::build_kernel_cmdline(Some(&vinfo.root_hash), false)
+
+            // If a workload volume was present (originally the second disk, now at
+            // index 2 after rootfs hashtree insertion), compute verity for it too.
+            let workload_roothash = if has_workload_disk {
+                let workload_disk = &config.disks[2]; // index shifted by hashtree insertion
+                let winfo = verity::ensure_verity(&workload_disk.path)
+                    .context("dm-verity setup failed for workload volume")?;
+                let wl_hash = winfo.root_hash.clone();
+                // Insert workload hash tree right after the workload volume (index 3)
+                config.disks.insert(
+                    3,
+                    aleph_tee::types::DiskConfig {
+                        path: winfo.hashtree_path,
+                        readonly: true,
+                        format: "raw".to_string(),
+                    },
+                );
+                info!(vm_id = %vm_id, workload_roothash = %wl_hash, "computed workload volume verity");
+                Some(wl_hash)
+            } else {
+                None
+            };
+
+            verity::build_kernel_cmdline(
+                Some(&vinfo.root_hash),
+                workload_roothash.as_deref(),
+                false,
+            )
         } else {
-            verity::build_kernel_cmdline(None, false)
+            verity::build_kernel_cmdline(None, None, false)
         };
 
         // Allocate NUMA node — only set numa_node (which triggers QEMU
