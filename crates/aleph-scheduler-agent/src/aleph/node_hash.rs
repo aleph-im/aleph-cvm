@@ -8,31 +8,28 @@ use std::path::Path;
 
 use aleph_sdk::client::{AlephPostClient, PostFilter, PostV0};
 use aleph_types::chain::Address;
+use aleph_types::item_hash::ItemHash;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-// ── NodeHash newtype ─────────────────────────────────────────────────────────
-
-/// A validated CRN node hash (64 hex-character [`ItemHash`](super::messages::ItemHash)).
+/// A validated CRN node hash (newtype over [`ItemHash`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeHash(String);
+pub struct NodeHash(ItemHash);
 
 impl NodeHash {
-    /// Parse and validate a string as a node hash (64 hex characters).
-    pub fn parse(hash: impl Into<String>) -> Result<Self> {
-        let hash = hash.into();
-        if hash.len() != 64 {
-            bail!("node hash must be 64 hex characters, got {}", hash.len());
-        }
-        if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            bail!("node hash must be hexadecimal");
-        }
-        Ok(Self(hash))
+    /// Parse and validate a string as a node hash.
+    pub fn parse(hash: &str) -> Result<Self> {
+        let item_hash: ItemHash = hash
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid node hash: {e}"))?;
+        Ok(Self(item_hash))
     }
+}
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+impl From<ItemHash> for NodeHash {
+    fn from(hash: ItemHash) -> Self {
+        Self(hash)
     }
 }
 
@@ -100,7 +97,7 @@ pub fn read_cached_hash(state_dir: &Path) -> Option<NodeHash> {
 pub fn write_cached_hash(state_dir: &Path, hash: &NodeHash) -> Result<()> {
     std::fs::create_dir_all(state_dir).context("creating state directory")?;
     let path = state_dir.join("node-hash");
-    std::fs::write(&path, hash.as_str()).context("writing node-hash cache")?;
+    std::fs::write(&path, hash.to_string()).context("writing node-hash cache")?;
     debug!(path = %path.display(), "cached node hash");
     Ok(())
 }
@@ -254,10 +251,8 @@ pub async fn discover_node_hash(
         1 => {
             let (post, content) = matches[0];
             let details = content.details.as_ref();
-            let hash = NodeHash::parse(post.original_item_hash.to_string())
-                .context("invalid item hash from API")?;
             let node = DiscoveredNode {
-                hash,
+                hash: NodeHash::from(post.original_item_hash.clone()),
                 name: details
                     .and_then(|d| d.name.as_deref())
                     .unwrap_or("unnamed")
@@ -305,7 +300,7 @@ mod tests {
     use super::*;
 
     use aleph_sdk::client::{GetPostsV0Response, GetPostsV1Response, MessageError};
-    use aleph_types::{chain::Chain, item_hash::ItemHash, timestamp::Timestamp};
+    use aleph_types::{chain::Chain, timestamp::Timestamp};
 
     /// Mock Aleph post client that returns a canned response.
     struct MockPostClient {
@@ -410,7 +405,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("should find a match");
-        assert_eq!(node.hash.as_str(), HASH_A);
+        assert_eq!(node.hash.to_string(), HASH_A);
         assert_eq!(node.name, "my-node");
         assert_eq!(node.address, "https://my-node.example.com");
     }
@@ -456,7 +451,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("URL normalization should match");
-        assert_eq!(node.hash.as_str(), HASH_A);
+        assert_eq!(node.hash.to_string(), HASH_A);
     }
 
     #[tokio::test]
@@ -472,7 +467,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("should match only the CRN post");
-        assert_eq!(node.hash.as_str(), HASH_B);
+        assert_eq!(node.hash.to_string(), HASH_B);
     }
 
     #[tokio::test]
@@ -501,18 +496,13 @@ mod tests {
     fn test_node_hash_parse() {
         let valid = "b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0";
         let hash = NodeHash::parse(valid).unwrap();
-        assert_eq!(hash.as_str(), valid);
+        assert_eq!(hash.to_string(), valid);
 
-        // Too short
-        assert!(NodeHash::parse("abc123").is_err());
+        // Empty string
+        assert!(NodeHash::parse("").is_err());
 
-        // Not hex
-        let bad = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
-        assert!(NodeHash::parse(bad).is_err());
-
-        // Too long
-        let long = "b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0aa";
-        assert!(NodeHash::parse(long).is_err());
+        // Random garbage
+        assert!(NodeHash::parse("not-a-hash").is_err());
     }
 
     #[test]
