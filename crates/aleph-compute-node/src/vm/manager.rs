@@ -16,7 +16,7 @@ use aleph_network::ndp_proxy::NdpProxy;
 use aleph_network::nftables::NftablesManager;
 use aleph_network::types::{PortForward, Protocol};
 use aleph_tee::traits::TeeBackend;
-use aleph_tee::types::VmConfig;
+use aleph_tee::types::{HugePageSize, VmConfig};
 
 use crate::network;
 use crate::numa::{NumaAllocator, NumaTopology};
@@ -305,6 +305,7 @@ impl VmManager {
             }
             p
         };
+        config.hugepage_size = Some(placement.hugepage_size);
 
         // Build QEMU command
         let paths = QemuPaths::for_vm(&self.run_dir, &vm_id);
@@ -340,7 +341,7 @@ impl VmManager {
                 // Release NUMA allocation
                 {
                     let mut numa = self.numa.lock().await;
-                    numa.release(placement.node, config.vcpus, config.memory_mb);
+                    numa.release(placement.node, config.vcpus, config.memory_mb, placement.hugepage_size);
                 }
                 // Clean up everything on failure
                 if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
@@ -430,8 +431,12 @@ impl VmManager {
 
         // Release NUMA allocation
         if let Some(node) = handle.numa_node {
+            let hugepage_size = handle.config.hugepage_size.unwrap_or_else(|| {
+                warn!(vm_id = %id, "missing hugepage_size on VM config, falling back to 2M");
+                HugePageSize::Size2M
+            });
             let mut numa = self.numa.lock().await;
-            numa.release(node, handle.config.vcpus, handle.config.memory_mb);
+            numa.release(node, handle.config.vcpus, handle.config.memory_mb, hugepage_size);
         }
 
         // Remove port forwards for this VM

@@ -269,6 +269,7 @@ impl ComputeNode for ComputeNodeService {
             tee,
             encrypted: req.encrypted,
             numa_node: None,
+            hugepage_size: None,
         };
 
         let info = self

@@ -1,4 +1,5 @@
 pub mod grpc;
+pub mod hugepages;
 pub mod network;
 pub mod numa;
 pub mod persistence;

@@ -149,6 +149,7 @@ mod tests {
             },
             encrypted: false,
             numa_node: None,
+            hugepage_size: None,
         };
 
         let args = backend.qemu_args(&config);

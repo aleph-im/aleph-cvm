@@ -47,6 +47,17 @@ fn default_raw() -> String {
     "raw".to_string()
 }
 
+/// Hugepage size used for the VM's memory backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HugePageSize {
+    /// 2 MiB hugepages (default, always available).
+    #[serde(rename = "2m")]
+    Size2M,
+    /// 1 GiB hugepages (requires boot-time reservation).
+    #[serde(rename = "1g")]
+    Size1G,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
     pub vm_id: String,
@@ -63,6 +74,9 @@ pub struct VmConfig {
     /// NUMA node this VM is pinned to (set by the allocator, not the user).
     #[serde(default)]
     pub numa_node: Option<u32>,
+    /// Hugepage size for this VM's memory backend (set by the allocator, not the user).
+    #[serde(default)]
+    pub hugepage_size: Option<HugePageSize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

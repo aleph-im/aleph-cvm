@@ -24,17 +24,22 @@ pub const DEFAULT_OVMF_PATH: &str = "/usr/local/share/ovmf-snp/OVMF.fd";
 pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
     let policy = config.tee.policy.as_deref().unwrap_or(DEFAULT_POLICY);
 
-    let memfd_opts = if let Some(node) = config.numa_node {
-        format!(
-            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M,host-nodes={},policy=bind",
-            config.memory_mb, node
-        )
-    } else {
-        format!(
-            "memory-backend-memfd,id=ram1,size={}M,share=true,hugetlb=on,hugetlbsize=2M",
-            config.memory_mb
-        )
+    let hugetlb_opts = match config.hugepage_size {
+        Some(crate::types::HugePageSize::Size1G) => ",hugetlb=on,hugetlbsize=1G",
+        Some(crate::types::HugePageSize::Size2M) => ",hugetlb=on,hugetlbsize=2M",
+        None => "",
     };
+
+    let numa_opts = if let Some(node) = config.numa_node {
+        format!(",host-nodes={node},policy=bind")
+    } else {
+        String::new()
+    };
+
+    let memfd_opts = format!(
+        "memory-backend-memfd,id=ram1,size={}M,share=true{hugetlb_opts}{numa_opts}",
+        config.memory_mb
+    );
 
     vec![
         "-machine".to_string(),
@@ -73,6 +78,7 @@ mod tests {
             },
             encrypted: false,
             numa_node: None,
+            hugepage_size: None,
         }
     }
 
@@ -150,6 +156,7 @@ mod tests {
     fn test_memory_backend_numa_binding() {
         let mut config = make_config(2048, None);
         config.numa_node = Some(1);
+        config.hugepage_size = Some(crate::types::HugePageSize::Size2M);
         let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
         let mem_arg = args
@@ -169,7 +176,8 @@ mod tests {
 
     #[test]
     fn test_memory_backend_no_numa() {
-        let config = make_config(2048, None);
+        let mut config = make_config(2048, None);
+        config.hugepage_size = Some(crate::types::HugePageSize::Size2M);
         let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
         let mem_arg = args
@@ -194,5 +202,40 @@ mod tests {
             .position(|a| a == "-bios")
             .expect("-bios flag missing");
         assert_eq!(args[bios_idx + 1], custom_path);
+    }
+
+    #[test]
+    fn test_memory_backend_1g_hugepages() {
+        let mut config = make_config(4096, None);
+        config.numa_node = Some(0);
+        config.hugepage_size = Some(crate::types::HugePageSize::Size1G);
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let mem_arg = args
+            .iter()
+            .find(|a| a.contains("memory-backend-memfd"))
+            .expect("should have memory-backend-memfd arg");
+
+        assert!(
+            mem_arg.contains("hugetlbsize=1G"),
+            "should use 1G hugepages but got: {mem_arg}"
+        );
+    }
+
+    #[test]
+    fn test_memory_backend_no_hugepages() {
+        let mut config = make_config(1024, None);
+        config.hugepage_size = None;
+        let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
+
+        let mem_arg = args
+            .iter()
+            .find(|a| a.contains("memory-backend-memfd"))
+            .expect("should have memory-backend-memfd arg");
+
+        assert!(
+            !mem_arg.contains("hugetlb"),
+            "should NOT have hugetlb when hugepage_size is None: {mem_arg}"
+        );
     }
 }
