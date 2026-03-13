@@ -12,10 +12,40 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
+// ── NodeHash newtype ─────────────────────────────────────────────────────────
+
+/// A validated CRN node hash (64 hex-character [`ItemHash`](super::messages::ItemHash)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeHash(String);
+
+impl NodeHash {
+    /// Parse and validate a string as a node hash (64 hex characters).
+    pub fn parse(hash: impl Into<String>) -> Result<Self> {
+        let hash = hash.into();
+        if hash.len() != 64 {
+            bail!("node hash must be 64 hex characters, got {}", hash.len());
+        }
+        if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("node hash must be hexadecimal");
+        }
+        Ok(Self(hash))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for NodeHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Result of a node hash discovery attempt.
 #[derive(Debug, Clone)]
 pub struct DiscoveredNode {
-    pub hash: String,
+    pub hash: NodeHash,
     pub name: String,
     pub address: String,
 }
@@ -44,18 +74,33 @@ fn normalize_url(url: &str) -> String {
 
 // ── Cache and PID file operations ───────────────────────────────────────────
 
-/// Read the cached node hash from `<state_dir>/node-hash`.
-pub fn read_cached_hash(state_dir: &Path) -> Option<String> {
+/// Read the raw cached hash string from `<state_dir>/node-hash`.
+fn read_cached_hash_raw(state_dir: &Path) -> Option<String> {
     let path = state_dir.join("node-hash");
     let hash = std::fs::read_to_string(&path).ok()?.trim().to_string();
     if hash.is_empty() { None } else { Some(hash) }
 }
 
+/// Read and validate the cached node hash from `<state_dir>/node-hash`.
+///
+/// Returns `None` if the file doesn't exist, is empty, or contains an invalid hash.
+/// Logs a warning if the cached value is corrupted.
+pub fn read_cached_hash(state_dir: &Path) -> Option<NodeHash> {
+    let raw = read_cached_hash_raw(state_dir)?;
+    match NodeHash::parse(&raw) {
+        Ok(hash) => Some(hash),
+        Err(e) => {
+            warn!(error = %e, "ignoring corrupted cached node hash");
+            None
+        }
+    }
+}
+
 /// Write the node hash to `<state_dir>/node-hash`.
-pub fn write_cached_hash(state_dir: &Path, hash: &str) -> Result<()> {
+pub fn write_cached_hash(state_dir: &Path, hash: &NodeHash) -> Result<()> {
     std::fs::create_dir_all(state_dir).context("creating state directory")?;
     let path = state_dir.join("node-hash");
-    std::fs::write(&path, hash).context("writing node-hash cache")?;
+    std::fs::write(&path, hash.as_str()).context("writing node-hash cache")?;
     debug!(path = %path.display(), "cached node hash");
     Ok(())
 }
@@ -95,17 +140,27 @@ pub fn send_sighup(pid: u32) -> Result<()> {
     Ok(())
 }
 
-// ── Validation ──────────────────────────────────────────────────────────────
+// ── Resolution ──────────────────────────────────────────────────────────────
 
-/// Validate that a string looks like a valid node hash (64 hex chars).
-pub fn validate_node_hash(hash: &str) -> Result<()> {
-    if hash.len() != 64 {
-        bail!("node hash must be 64 hex characters, got {}", hash.len());
+/// Resolve the initial node hash from an explicit CLI flag or cache.
+///
+/// Priority: explicit `--node-hash` flag > cached file > `None`.
+pub fn resolve_initial_hash(
+    explicit_hash: Option<&str>,
+    state_dir: &Path,
+) -> Result<Option<NodeHash>> {
+    if let Some(hash) = explicit_hash {
+        let node_hash = NodeHash::parse(hash)?;
+        info!(node_hash = %node_hash, "using node hash from --node-hash flag");
+        return Ok(Some(node_hash));
     }
-    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("node hash must be hexadecimal");
+
+    if let Some(cached) = read_cached_hash(state_dir) {
+        info!(node_hash = %cached, "using cached node hash");
+        return Ok(Some(cached));
     }
-    Ok(())
+
+    Ok(None)
 }
 
 // ── Discovery ───────────────────────────────────────────────────────────────
@@ -199,8 +254,10 @@ pub async fn discover_node_hash(
         1 => {
             let (post, content) = matches[0];
             let details = content.details.as_ref();
+            let hash = NodeHash::parse(post.original_item_hash.to_string())
+                .context("invalid item hash from API")?;
             let node = DiscoveredNode {
-                hash: post.original_item_hash.to_string(),
+                hash,
                 name: details
                     .and_then(|d| d.name.as_deref())
                     .unwrap_or("unnamed")
@@ -353,7 +410,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("should find a match");
-        assert_eq!(node.hash, HASH_A);
+        assert_eq!(node.hash.as_str(), HASH_A);
         assert_eq!(node.name, "my-node");
         assert_eq!(node.address, "https://my-node.example.com");
     }
@@ -399,7 +456,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("URL normalization should match");
-        assert_eq!(node.hash, HASH_A);
+        assert_eq!(node.hash.as_str(), HASH_A);
     }
 
     #[tokio::test]
@@ -415,7 +472,7 @@ mod tests {
             .unwrap();
 
         let node = result.expect("should match only the CRN post");
-        assert_eq!(node.hash, HASH_B);
+        assert_eq!(node.hash.as_str(), HASH_B);
     }
 
     #[tokio::test]
@@ -441,21 +498,21 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_node_hash() {
-        // Valid
+    fn test_node_hash_parse() {
         let valid = "b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0";
-        assert!(validate_node_hash(valid).is_ok());
+        let hash = NodeHash::parse(valid).unwrap();
+        assert_eq!(hash.as_str(), valid);
 
         // Too short
-        assert!(validate_node_hash("abc123").is_err());
+        assert!(NodeHash::parse("abc123").is_err());
 
         // Not hex
         let bad = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
-        assert!(validate_node_hash(bad).is_err());
+        assert!(NodeHash::parse(bad).is_err());
 
         // Too long
         let long = "b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0aa";
-        assert!(validate_node_hash(long).is_err());
+        assert!(NodeHash::parse(long).is_err());
     }
 
     #[test]
@@ -467,13 +524,17 @@ mod tests {
         assert!(read_cached_hash(state_dir).is_none());
 
         // Write and read back
-        let hash = "b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0";
-        write_cached_hash(state_dir, hash).unwrap();
+        let hash =
+            NodeHash::parse("b93eaba554318bd074819477e48147bb7bf4121bb771a6074022b0bf412cacc0")
+                .unwrap();
+        write_cached_hash(state_dir, &hash).unwrap();
         assert_eq!(read_cached_hash(state_dir).unwrap(), hash);
 
         // Overwrite
-        let hash2 = "0000000000000000000000000000000000000000000000000000000000000001";
-        write_cached_hash(state_dir, hash2).unwrap();
+        let hash2 =
+            NodeHash::parse("0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap();
+        write_cached_hash(state_dir, &hash2).unwrap();
         assert_eq!(read_cached_hash(state_dir).unwrap(), hash2);
     }
 
