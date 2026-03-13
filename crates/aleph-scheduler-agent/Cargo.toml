@@ -14,6 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 aleph-compute-proto = { path = "../aleph-compute-proto" }
+aleph-sdk.workspace = true
+aleph-types.workspace = true
+url.workspace = true
 
 # gRPC client
 tonic.workspace = true
