@@ -40,6 +40,11 @@ ring = "0.17"
 hex = "0.4"
 pem = "3"
 
+# Aleph SDK
+aleph-sdk = { path = "../aleph-rs/crates/aleph-sdk" }
+aleph-types = { path = "../aleph-rs/crates/aleph-types" }
+url = "2"
+
 # HTTP
 actix-web = "4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "charset", "http2"] }

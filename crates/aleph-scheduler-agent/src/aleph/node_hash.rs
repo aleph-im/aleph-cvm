@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use aleph_sdk::client::{AlephPostClient, PostFilter, PostV0};
+use aleph_types::chain::Address;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
@@ -18,36 +20,11 @@ pub struct DiscoveredNode {
     pub address: String,
 }
 
-// ── Aleph posts API response types ──────────────────────────────────────────
+// ── Corechan-operation content types ────────────────────────────────────────
 
+/// Inner content of a `corechan-operation` POST message.
 #[derive(Debug, Deserialize)]
-struct PostsResponse {
-    posts: Vec<Post>,
-    pagination_total: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Post {
-    /// Hash of the original post (permanent CRN identifier).
-    #[serde(default)]
-    original_item_hash: Option<String>,
-    /// Hash of this version of the post.
-    item_hash: String,
-    /// Inner content of the corechan-operation.
-    content: PostContent,
-}
-
-impl Post {
-    /// The permanent CRN identifier (original hash, or item_hash if no amend).
-    fn crn_hash(&self) -> &str {
-        self.original_item_hash
-            .as_deref()
-            .unwrap_or(&self.item_hash)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct PostContent {
+struct CorechanContent {
     action: Option<String>,
     details: Option<CrnDetails>,
 }
@@ -133,6 +110,17 @@ pub fn validate_node_hash(hash: &str) -> Result<()> {
 
 // ── Discovery ───────────────────────────────────────────────────────────────
 
+/// Extract CRN details from a PostV0, returning None if it's not a
+/// `create-resource-node` operation.
+fn parse_crn_post(post: &PostV0) -> Option<CorechanContent> {
+    let content: CorechanContent = post.content_as().ok()?;
+    if content.action.as_deref() == Some("create-resource-node") {
+        Some(content)
+    } else {
+        None
+    }
+}
+
 /// Query the Aleph posts API to discover this node's CRN hash.
 ///
 /// Looks for `create-resource-node` operations by `owner_address` whose
@@ -141,29 +129,23 @@ pub fn validate_node_hash(hash: &str) -> Result<()> {
 /// Returns `Ok(Some(node))` if exactly one match is found, `Ok(None)` if zero
 /// matches, and logs a warning if multiple matches are found.
 pub async fn discover_node_hash(
-    client: &reqwest::Client,
-    api_url: &str,
+    client: &impl AlephPostClient,
     owner_address: &str,
     domain_name: &str,
 ) -> Result<Option<DiscoveredNode>> {
-    let url = format!(
-        "{}/api/v0/posts.json?addresses={}&types=corechan-operation&pagination=200",
-        api_url.trim_end_matches('/'),
-        owner_address,
-    );
+    let filter = PostFilter {
+        addresses: Some(vec![Address::from(owner_address.to_string())]),
+        post_types: Some(vec!["corechan-operation".to_string()]),
+        pagination: Some(200),
+        ..Default::default()
+    };
 
-    debug!(url = %url, "querying Aleph API for corechan operations");
+    debug!(owner = %owner_address, "querying Aleph API for corechan operations");
 
-    let response: PostsResponse = client
-        .get(&url)
-        .send()
+    let response = client
+        .get_posts_v0(&filter)
         .await
-        .context("querying Aleph posts API")?
-        .error_for_status()
-        .context("Aleph posts API returned error")?
-        .json()
-        .await
-        .context("parsing Aleph posts response")?;
+        .context("querying Aleph posts API")?;
 
     if response.pagination_total > 200 {
         warn!(
@@ -174,18 +156,17 @@ pub async fn discover_node_hash(
 
     let expected_url = normalize_url(&format!("https://{domain_name}"));
 
-    // Filter for create-resource-node operations with matching URL.
-    let create_ops: Vec<&Post> = response
+    // Parse CRN registrations from the posts.
+    let create_ops: Vec<(&PostV0, CorechanContent)> = response
         .posts
         .iter()
-        .filter(|p| p.content.action.as_deref() == Some("create-resource-node"))
+        .filter_map(|p| parse_crn_post(p).map(|c| (p, c)))
         .collect();
 
-    let matches: Vec<&Post> = create_ops
+    let matches: Vec<&(&PostV0, CorechanContent)> = create_ops
         .iter()
-        .copied()
-        .filter(|p| {
-            p.content
+        .filter(|(_, content)| {
+            content
                 .details
                 .as_ref()
                 .and_then(|d| d.address.as_deref())
@@ -201,24 +182,25 @@ pub async fn discover_node_hash(
                 total_crn_registrations = create_ops.len(),
                 "no matching CRN registration found"
             );
-            if !create_ops.is_empty() {
-                for op in &create_ops {
-                    let addr = op
-                        .content
-                        .details
-                        .as_ref()
-                        .and_then(|d| d.address.as_deref())
-                        .unwrap_or("(none)");
-                    debug!(hash = %op.crn_hash(), address = %addr, "  registered CRN (no URL match)");
-                }
+            for (post, content) in &create_ops {
+                let addr = content
+                    .details
+                    .as_ref()
+                    .and_then(|d| d.address.as_deref())
+                    .unwrap_or("(none)");
+                debug!(
+                    hash = %post.original_item_hash,
+                    address = %addr,
+                    "  registered CRN (no URL match)"
+                );
             }
             Ok(None)
         }
         1 => {
-            let post = matches[0];
-            let details = post.content.details.as_ref();
+            let (post, content) = matches[0];
+            let details = content.details.as_ref();
             let node = DiscoveredNode {
-                hash: post.crn_hash().to_string(),
+                hash: post.original_item_hash.to_string(),
                 name: details
                     .and_then(|d| d.name.as_deref())
                     .unwrap_or("unnamed")
@@ -243,13 +225,18 @@ pub async fn discover_node_hash(
                 "multiple CRN registrations match URL; \
                  use --node-hash or `set-node-hash` to disambiguate:"
             );
-            for m in &matches {
-                let details = m.content.details.as_ref();
+            for (post, content) in matches {
+                let details = content.details.as_ref();
                 let name = details.and_then(|d| d.name.as_deref()).unwrap_or("unnamed");
                 let addr = details
                     .and_then(|d| d.address.as_deref())
                     .unwrap_or("(none)");
-                warn!(hash = %m.crn_hash(), name = %name, address = %addr, "  candidate");
+                warn!(
+                    hash = %post.original_item_hash,
+                    name = %name,
+                    address = %addr,
+                    "  candidate"
+                );
             }
             Ok(None)
         }
@@ -321,83 +308,5 @@ mod tests {
 
         remove_pid_file(state_dir);
         assert!(read_pid(state_dir).is_none());
-    }
-
-    #[test]
-    fn test_post_crn_hash() {
-        // With original_item_hash
-        let post = Post {
-            original_item_hash: Some("original".to_string()),
-            item_hash: "current".to_string(),
-            content: PostContent {
-                action: None,
-                details: None,
-            },
-        };
-        assert_eq!(post.crn_hash(), "original");
-
-        // Without original_item_hash
-        let post = Post {
-            original_item_hash: None,
-            item_hash: "current".to_string(),
-            content: PostContent {
-                action: None,
-                details: None,
-            },
-        };
-        assert_eq!(post.crn_hash(), "current");
-    }
-
-    #[test]
-    fn test_deserialize_posts_response() {
-        let json = r#"{
-            "posts": [
-                {
-                    "item_hash": "abc123",
-                    "original_item_hash": "abc123",
-                    "content": {
-                        "action": "create-resource-node",
-                        "tags": ["create-resource-node", "mainnet"],
-                        "details": {
-                            "name": "my-node",
-                            "address": "https://my-node.example.com/",
-                            "type": "compute"
-                        }
-                    }
-                },
-                {
-                    "item_hash": "def456",
-                    "content": {
-                        "action": "stake-split",
-                        "tags": ["stake-split", "mainnet"]
-                    }
-                }
-            ],
-            "pagination_page": 1,
-            "pagination_total": 2,
-            "pagination_per_page": 200,
-            "pagination_item": "posts"
-        }"#;
-
-        let resp: PostsResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.posts.len(), 2);
-        assert_eq!(resp.pagination_total, 2);
-        assert_eq!(resp.posts[0].crn_hash(), "abc123");
-        assert_eq!(
-            resp.posts[0].content.action.as_deref(),
-            Some("create-resource-node")
-        );
-        assert_eq!(
-            resp.posts[0]
-                .content
-                .details
-                .as_ref()
-                .unwrap()
-                .address
-                .as_deref(),
-            Some("https://my-node.example.com/")
-        );
-        // Second post has no details (stake operation)
-        assert!(resp.posts[1].content.details.is_none());
     }
 }

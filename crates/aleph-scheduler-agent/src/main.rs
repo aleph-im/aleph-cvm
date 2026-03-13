@@ -293,15 +293,14 @@ async fn health(state: web::Data<Arc<AppState>>) -> HttpResponse {
 
 // ─── Node hash discovery background task ────────────────────────────────────
 
-/// Background loop that discovers the node hash and re-validates periodically.
+/// Background loop that discovers the node hash, retrying every 5 minutes until found.
 async fn node_hash_discovery_loop(
     node_hash_state: Arc<RwLock<Option<String>>>,
-    api_url: String,
+    aleph_client: aleph_sdk::client::AlephClient,
     owner_address: String,
     domain_name: String,
     state_dir: PathBuf,
 ) {
-    let client = reqwest::Client::new();
     let retry_interval = Duration::from_secs(300); // 5 minutes
 
     loop {
@@ -311,7 +310,7 @@ async fn node_hash_discovery_loop(
             return;
         }
 
-        match node_hash::discover_node_hash(&client, &api_url, &owner_address, &domain_name).await {
+        match node_hash::discover_node_hash(&aleph_client, &owner_address, &domain_name).await {
             Ok(Some(discovered)) => {
                 info!(
                     node_hash = %discovered.hash,
@@ -405,9 +404,11 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     if discovery_active {
         let owner = args.owner_address.clone().unwrap();
         let domain = args.domain_name.clone().unwrap();
-        let api_url = args.connector_url.clone();
         let state_dir = args.state_dir.clone();
         let hash_state = node_hash_state.clone();
+
+        let api_url = url::Url::parse(&args.connector_url).context("invalid --connector-url")?;
+        let aleph_client = aleph_sdk::client::AlephClient::new(api_url);
 
         info!(
             owner_address = %owner,
@@ -416,7 +417,11 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         );
 
         tokio::spawn(node_hash_discovery_loop(
-            hash_state, api_url, owner, domain, state_dir,
+            hash_state,
+            aleph_client,
+            owner,
+            domain,
+            state_dir,
         ));
     } else if args.node_hash.is_none() {
         if args.owner_address.is_none() && args.domain_name.is_none() {
