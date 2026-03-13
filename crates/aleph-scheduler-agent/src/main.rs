@@ -19,6 +19,9 @@ use aleph_scheduler_agent::aleph::messages::{ExecutableMessage, ItemHash};
 use aleph_scheduler_agent::aleph::node_hash;
 use aleph_scheduler_agent::aleph::volumes::VolumeCache;
 use aleph_scheduler_agent::client::connect_compute_node;
+use aleph_scheduler_agent::status::config::CrnConfig;
+use aleph_scheduler_agent::status::executions::map_executions;
+use aleph_scheduler_agent::status::usage::collect_usage;
 
 #[derive(Parser)]
 #[command(name = "aleph-scheduler-agent")]
@@ -84,6 +87,19 @@ struct RunArgs {
     /// Node's public domain name (e.g. "my-crn.example.com").
     #[arg(long, env = "DOMAIN_NAME")]
     domain_name: Option<String>,
+
+    // ── Node capabilities ────────────────────────────────────────────────
+    /// Enable confidential computing (SEV-SNP).
+    #[arg(long, env = "ALEPH_VM_ENABLE_CONFIDENTIAL_COMPUTING")]
+    enable_confidential_computing: bool,
+
+    /// IPv6 address pool (non-empty value indicates IPv6 support).
+    #[arg(long, env = "ALEPH_VM_IPV6_ADDRESS_POOL")]
+    ipv6_address_pool: Option<String>,
+
+    /// Payment receiver Ethereum address.
+    #[arg(long, env = "ALEPH_VM_PAYMENT_RECEIVER_ADDRESS")]
+    payment_receiver_address: Option<String>,
 }
 
 /// Arguments for `set-node-hash` — writes a hash to the cache and signals the running agent.
@@ -108,6 +124,10 @@ struct AppState {
     allocation_token_hash: Option<[u8; 32]>,
     /// Discovered node hash (may be None if not yet resolved).
     node_hash: Arc<RwLock<Option<node_hash::NodeHash>>>,
+    /// CRN configuration for scheduler polling.
+    crn_config: CrnConfig,
+    /// Cache directory path (for disk usage reporting).
+    cache_dir: PathBuf,
 }
 
 // ─── HTTP handlers (allocation API) ─────────────────────────────────────────
@@ -291,6 +311,37 @@ async fn health(state: web::Data<Arc<AppState>>) -> HttpResponse {
     }))
 }
 
+/// GET /about/usage/system — host resource usage.
+async fn get_system_usage(state: web::Data<Arc<AppState>>) -> HttpResponse {
+    match collect_usage(&state.cache_dir).await {
+        Ok(usage) => HttpResponse::Ok().json(usage),
+        Err(e) => {
+            error!("Failed to collect system usage: {e:#}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+/// GET /about/executions/list — running VMs with networking info.
+async fn get_executions(state: web::Data<Arc<AppState>>) -> HttpResponse {
+    let mut client = state.compute_client.write().await;
+    match client.list_vms(ListVmsRequest {}).await {
+        Ok(resp) => {
+            let executions = map_executions(&resp.into_inner().vms);
+            HttpResponse::Ok().json(executions)
+        }
+        Err(e) => {
+            error!("Failed to list VMs: {e:#}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+/// GET /status/config — node capabilities.
+async fn get_config(state: web::Data<Arc<AppState>>) -> HttpResponse {
+    HttpResponse::Ok().json(&state.crn_config)
+}
+
 // ─── Node hash discovery background task ────────────────────────────────────
 
 /// Background loop that discovers the node hash, retrying every 5 minutes until found.
@@ -457,6 +508,15 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
     // ── Build app state and start HTTP server ────────────────────────────
 
+    let cache_dir = args.cache_dir.clone();
+    let crn_config = CrnConfig {
+        enable_confidential_computing: args.enable_confidential_computing,
+        ipv6_support: args.ipv6_address_pool.is_some(),
+        gpu_support: false,
+        payment_receiver_address: args.payment_receiver_address.clone(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+
     let state = Arc::new(AppState {
         compute_client: RwLock::new(compute_client),
         volume_cache: VolumeCache::new(args.cache_dir, args.connector_url),
@@ -467,6 +527,8 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         messages: RwLock::new(std::collections::HashMap::new()),
         allocation_token_hash,
         node_hash: node_hash_state,
+        crn_config,
+        cache_dir,
     });
 
     let listen = args.listen.clone();
@@ -478,6 +540,9 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             .route("/health", web::get().to(health))
             .route("/control/allocations", web::post().to(handle_allocation))
             .route("/control/messages", web::post().to(handle_message))
+            .route("/about/usage/system", web::get().to(get_system_usage))
+            .route("/about/executions/list", web::get().to(get_executions))
+            .route("/status/config", web::get().to(get_config))
     })
     .bind(&listen)?
     .run()

@@ -44,6 +44,9 @@ hmac.workspace = true
 # CLI
 clap.workspace = true
 
+# System calls
+libc = "0.2"
+
 # Errors and logging
 anyhow.workspace = true
 thiserror.workspace = true
