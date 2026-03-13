@@ -79,6 +79,14 @@ prepare_chroot() {
     if [ -n "$gateway" ]; then
         echo "nameserver ${gateway}" > /mnt/root/etc/resolv.conf
     fi
+    # Inject SSH authorized keys if provided via secret injection.
+    if [ -f /tmp/secrets/ssh_authorized_keys ]; then
+        echo "init: injecting SSH authorized keys"
+        /bin/busybox mkdir -p /mnt/root/root/.ssh
+        /bin/busybox cp /tmp/secrets/ssh_authorized_keys /mnt/root/root/.ssh/authorized_keys
+        /bin/busybox chmod 600 /mnt/root/root/.ssh/authorized_keys
+        /bin/busybox chmod 700 /mnt/root/root/.ssh
+    fi
     echo "init: chroot environment prepared (proc, sys, dev, DNS)"
 }
 
