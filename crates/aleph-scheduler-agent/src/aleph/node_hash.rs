@@ -247,6 +247,190 @@ pub async fn discover_node_hash(
 mod tests {
     use super::*;
 
+    use aleph_sdk::client::{GetPostsV0Response, GetPostsV1Response, MessageError};
+    use aleph_types::{chain::Chain, item_hash::ItemHash, timestamp::Timestamp};
+
+    /// Mock Aleph post client that returns a canned response.
+    struct MockPostClient {
+        posts: Vec<PostV0>,
+    }
+
+    impl MockPostClient {
+        fn new(posts: Vec<PostV0>) -> Self {
+            Self { posts }
+        }
+    }
+
+    impl AlephPostClient for MockPostClient {
+        fn get_posts_v0(
+            &self,
+            _filter: &PostFilter,
+        ) -> impl std::future::Future<Output = Result<GetPostsV0Response, MessageError>> + Send
+        {
+            let posts = self.posts.clone();
+            let total = posts.len() as u32;
+            async move {
+                Ok(GetPostsV0Response {
+                    posts,
+                    pagination_per_page: 200,
+                    pagination_page: 1,
+                    pagination_total: total,
+                })
+            }
+        }
+
+        fn get_posts_v1(
+            &self,
+            _filter: &PostFilter,
+        ) -> impl std::future::Future<Output = Result<GetPostsV1Response, MessageError>> + Send
+        {
+            async { unimplemented!("v1 not used") }
+        }
+    }
+
+    /// Build a PostV0 that looks like a `create-resource-node` corechan-operation.
+    fn make_crn_post(hash: &str, name: &str, address: &str) -> PostV0 {
+        let item_hash: ItemHash = hash.parse().expect("valid test hash");
+        let sender = Address::from("0xdeadbeef".to_string());
+        PostV0 {
+            chain: Chain::Ethereum,
+            item_hash: item_hash.clone(),
+            sender: sender.clone(),
+            post_type: "corechan-operation".to_string(),
+            channel: None,
+            confirmed: false,
+            content: serde_json::json!({
+                "action": "create-resource-node",
+                "details": {
+                    "name": name,
+                    "address": address,
+                }
+            }),
+            time: Timestamp::from(1700000000.0),
+            confirmations: vec![],
+            original_item_hash: item_hash.clone(),
+            original_type: None,
+            hash: item_hash,
+            address: sender,
+            reference: None,
+        }
+    }
+
+    /// Build a PostV0 with a non-CRN action (should be ignored).
+    fn make_non_crn_post(hash: &str) -> PostV0 {
+        let item_hash: ItemHash = hash.parse().expect("valid test hash");
+        let sender = Address::from("0xdeadbeef".to_string());
+        PostV0 {
+            chain: Chain::Ethereum,
+            item_hash: item_hash.clone(),
+            sender: sender.clone(),
+            post_type: "corechan-operation".to_string(),
+            channel: None,
+            confirmed: false,
+            content: serde_json::json!({
+                "action": "link-resource-node",
+                "details": { "ccn_hash": "abc123" }
+            }),
+            time: Timestamp::from(1700000000.0),
+            confirmations: vec![],
+            original_item_hash: item_hash.clone(),
+            original_type: None,
+            hash: item_hash,
+            address: sender,
+            reference: None,
+        }
+    }
+
+    const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const HASH_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    #[tokio::test]
+    async fn test_discover_single_match() {
+        let client = MockPostClient::new(vec![
+            make_crn_post(HASH_A, "my-node", "https://my-node.example.com"),
+            make_crn_post(HASH_B, "other-node", "https://other.example.com"),
+        ]);
+
+        let result = discover_node_hash(&client, "0xowner", "my-node.example.com")
+            .await
+            .unwrap();
+
+        let node = result.expect("should find a match");
+        assert_eq!(node.hash, HASH_A);
+        assert_eq!(node.name, "my-node");
+        assert_eq!(node.address, "https://my-node.example.com");
+    }
+
+    #[tokio::test]
+    async fn test_discover_no_match() {
+        let client = MockPostClient::new(vec![
+            make_crn_post(HASH_A, "node-a", "https://a.example.com"),
+            make_crn_post(HASH_B, "node-b", "https://b.example.com"),
+        ]);
+
+        let result = discover_node_hash(&client, "0xowner", "not-registered.example.com")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_discover_multiple_matches_returns_none() {
+        let client = MockPostClient::new(vec![
+            make_crn_post(HASH_A, "node-1", "https://same.example.com"),
+            make_crn_post(HASH_B, "node-2", "https://same.example.com"),
+        ]);
+
+        let result = discover_node_hash(&client, "0xowner", "same.example.com")
+            .await
+            .unwrap();
+
+        assert!(result.is_none(), "multiple matches should return None");
+    }
+
+    #[tokio::test]
+    async fn test_discover_url_normalization() {
+        let client = MockPostClient::new(vec![make_crn_post(
+            HASH_A,
+            "my-node",
+            "https://My-Node.Example.COM/",
+        )]);
+
+        let result = discover_node_hash(&client, "0xowner", "my-node.example.com")
+            .await
+            .unwrap();
+
+        let node = result.expect("URL normalization should match");
+        assert_eq!(node.hash, HASH_A);
+    }
+
+    #[tokio::test]
+    async fn test_discover_ignores_non_crn_ops() {
+        let client = MockPostClient::new(vec![
+            make_non_crn_post(HASH_A),
+            make_crn_post(HASH_B, "target", "https://target.example.com"),
+            make_non_crn_post(HASH_C),
+        ]);
+
+        let result = discover_node_hash(&client, "0xowner", "target.example.com")
+            .await
+            .unwrap();
+
+        let node = result.expect("should match only the CRN post");
+        assert_eq!(node.hash, HASH_B);
+    }
+
+    #[tokio::test]
+    async fn test_discover_empty_response() {
+        let client = MockPostClient::new(vec![]);
+        let result = discover_node_hash(&client, "0xowner", "any.example.com")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
     #[test]
     fn test_normalize_url() {
         assert_eq!(

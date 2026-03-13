@@ -388,8 +388,13 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         info!(node_hash = %hash, "using node hash from --node-hash flag");
         Some(hash.clone())
     } else if let Some(cached) = node_hash::read_cached_hash(&args.state_dir) {
-        info!(node_hash = %cached, "using cached node hash");
-        Some(cached)
+        if let Err(e) = node_hash::validate_node_hash(&cached) {
+            warn!(error = %e, "ignoring corrupted cached node hash");
+            None
+        } else {
+            info!(node_hash = %cached, "using cached node hash");
+            Some(cached)
+        }
     } else {
         None
     };
