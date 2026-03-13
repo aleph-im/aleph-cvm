@@ -341,7 +341,12 @@ impl VmManager {
                 // Release NUMA allocation
                 {
                     let mut numa = self.numa.lock().await;
-                    numa.release(placement.node, config.vcpus, config.memory_mb, placement.hugepage_size);
+                    numa.release(
+                        placement.node,
+                        config.vcpus,
+                        config.memory_mb,
+                        placement.hugepage_size,
+                    );
                 }
                 // Clean up everything on failure
                 if let (Some(ref ipv6), Some(ndp)) = (vm_ipv6, &self.ndp_proxy) {
@@ -436,7 +441,12 @@ impl VmManager {
                 HugePageSize::Size2M
             });
             let mut numa = self.numa.lock().await;
-            numa.release(node, handle.config.vcpus, handle.config.memory_mb, hugepage_size);
+            numa.release(
+                node,
+                handle.config.vcpus,
+                handle.config.memory_mb,
+                hugepage_size,
+            );
         }
 
         // Remove port forwards for this VM
