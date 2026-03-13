@@ -22,3 +22,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 zeroize.workspace = true
+k256.workspace = true
+rand.workspace = true

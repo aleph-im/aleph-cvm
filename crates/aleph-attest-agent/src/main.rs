@@ -1,4 +1,5 @@
 mod attestation;
+mod challenge;
 mod proxy;
 mod secrets;
 mod tls;
@@ -12,8 +13,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
 
+use challenge::{ChallengeStore, challenge_endpoint};
 use proxy::{AppState, attestation_endpoint, proxy_handler};
-use secrets::inject_secret_handler;
+use secrets::{HostDataCache, inject_secret_handler};
 use tls::{build_rustls_config, generate_attested_tls_identity};
 
 /// Aleph attestation agent — in-VM sidecar that provides attested HTTPS
@@ -56,27 +58,38 @@ async fn main() -> Result<()> {
         .context("failed to generate attested TLS identity")?;
     info!("generated attested TLS identity");
 
-    // 4. Build rustls config.
+    // 4. Cache HOSTDATA from the attestation report for owner authentication.
+    let host_data_cache = web::Data::new(HostDataCache {
+        host_data: identity.report.host_data,
+    });
+
+    // 5. Build rustls config.
     let rustls_config = build_rustls_config(&identity).context("failed to build rustls config")?;
 
-    // 5. Create shared application state.
+    // 6. Create shared application state.
     let app_state = web::Data::new(AppState {
         backend,
         upstream: cli.upstream.clone(),
         http_client: reqwest::Client::new(),
     });
 
-    // 6. Start actix-web HTTPS server.
+    // 7. Create challenge store for owner authentication.
+    let challenge_store = web::Data::new(ChallengeStore::new());
+
+    // 8. Start actix-web HTTPS server.
     let bind_addr = format!("0.0.0.0:{}", cli.port);
     info!(addr = %bind_addr, "binding HTTPS server");
 
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
+            .app_data(challenge_store.clone())
+            .app_data(host_data_cache.clone())
             .route(
                 "/.well-known/attestation",
                 web::get().to(attestation_endpoint),
             )
+            .route("/confidential/challenge", web::get().to(challenge_endpoint))
             .route(
                 "/confidential/inject-secret",
                 web::post().to(inject_secret_handler),

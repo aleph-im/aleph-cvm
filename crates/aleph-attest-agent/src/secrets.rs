@@ -4,9 +4,14 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use actix_web::{HttpResponse, web};
+use k256::ecdsa::signature::Verifier;
+use k256::ecdsa::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::info;
 use zeroize::Zeroizing;
+
+use crate::challenge::ChallengeStore;
 
 /// Directory where injected secrets are written as individual files.
 const SECRETS_DIR: &str = "/tmp/secrets";
@@ -25,9 +30,18 @@ const MAX_VALUE_SIZE: usize = 64 * 1024;
 /// no TOCTOU race between checking and writing.
 static INJECTION_LOCK: Mutex<Option<()>> = Mutex::new(None);
 
+/// Cached HOSTDATA from the VM's attestation report, used to verify owner identity.
+pub struct HostDataCache {
+    pub host_data: [u8; 32],
+}
+
 #[derive(Deserialize)]
 pub struct InjectSecretRequest {
-    #[serde(flatten)]
+    /// Hex-encoded compressed secp256k1 public key (33 bytes).
+    pub pubkey: String,
+    /// Hex-encoded DER ECDSA signature over the challenge nonce.
+    pub signature: String,
+    /// Key-value map of secrets to inject.
     pub secrets: HashMap<String, String>,
 }
 
@@ -38,15 +52,81 @@ pub struct InjectSecretResponse {
 
 /// POST /confidential/inject-secret
 ///
-/// Accepts a JSON object of key-value pairs. Each key is written as a file
-/// under /tmp/secrets/<key> containing the value. One-shot: returns 409 on
-/// subsequent calls. Secret values are zeroized from memory after being
-/// written to disk. Files are created with mode 0600.
+/// Owner-authenticated secret injection. The caller must:
+/// 1. Obtain a challenge nonce via GET /confidential/challenge
+/// 2. Sign the nonce with the secp256k1 key whose SHA-256 hash matches HOSTDATA
+/// 3. Submit the signed request with secrets
 ///
-/// Limits: max 16 secrets, max 64-char key names, max 64 KiB per value.
-pub async fn inject_secret_handler(body: web::Json<InjectSecretRequest>) -> HttpResponse {
+/// Returns 400 for malformed requests, 403 for auth failures, 409 if already injected.
+pub async fn inject_secret_handler(
+    body: web::Json<InjectSecretRequest>,
+    challenge_store: web::Data<ChallengeStore>,
+    host_data_cache: web::Data<HostDataCache>,
+) -> HttpResponse {
+    // --- Authentication ---
+
+    // 1. Decode the public key from hex.
+    let pubkey_bytes = match hex::decode(&body.pubkey) {
+        Ok(b) => b,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid hex pubkey: {e}")}));
+        }
+    };
+
+    // 2. Verify SHA-256(pubkey) == HOSTDATA.
+    let pubkey_hash = Sha256::digest(&pubkey_bytes);
+    if pubkey_hash.as_slice() != host_data_cache.host_data {
+        return HttpResponse::Forbidden()
+            .json(serde_json::json!({"error": "pubkey does not match HOSTDATA"}));
+    }
+
+    // 3. Parse the public key as a secp256k1 verifying key.
+    let verifying_key = match VerifyingKey::from_sec1_bytes(&pubkey_bytes) {
+        Ok(k) => k,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid secp256k1 pubkey: {e}")}));
+        }
+    };
+
+    // 4. Decode the DER signature.
+    let sig = match Signature::from_der(&match hex::decode(&body.signature) {
+        Ok(b) => b,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid hex signature: {e}")}));
+        }
+    }) {
+        Ok(s) => s,
+        Err(e) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": format!("invalid DER signature: {e}")}));
+        }
+    };
+
+    // 5. Consume the challenge nonce.
+    // We need the raw nonce bytes to verify against, so we first decode the nonce
+    // from the challenge store.
+    // But the caller doesn't send the nonce — it's stored server-side. We consume it.
+    // The caller signed the raw 32-byte nonce.
+    let nonce = match challenge_store.consume_any() {
+        Some(n) => n,
+        None => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": "no active challenge or challenge expired"}));
+        }
+    };
+
+    // 6. Verify the signature over the nonce.
+    if verifying_key.verify(&nonce, &sig).is_err() {
+        return HttpResponse::Forbidden()
+            .json(serde_json::json!({"error": "signature verification failed"}));
+    }
+
+    // --- Injection (existing logic) ---
+
     // Acquire the injection lock for the entire operation.
-    // This eliminates the TOCTOU race that existed with AtomicBool.
     let mut guard = match INJECTION_LOCK.lock() {
         Ok(g) => g,
         Err(_) => {

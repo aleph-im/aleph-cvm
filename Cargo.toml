@@ -35,6 +35,7 @@ der = "0.7"
 const-oid = "0.9"
 openssl = "0.10"
 sha2 = "0.10"
+k256 = { version = "0.13", features = ["ecdsa"] }
 p384 = { version = "0.13", features = ["ecdsa"] }
 ring = "0.17"
 hex = "0.4"
