@@ -260,24 +260,8 @@ info "NAT masquerade will be set up by aleph-compute-node (nftables)"
 # ── 4. Huge pages ────────────────────────────────────────────────────────────
 
 header "Huge pages"
-
-# SEV-SNP pvalidate runs per-page at boot — 2MB huge pages cut this from
-# ~60ms to <1ms.  Allocate enough for the VM memory (1024MB = 512 × 2MB pages)
-# plus some headroom.
-HUGEPAGES_NEEDED=560
-HUGEPAGES_CURRENT=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages)
-if [[ "$HUGEPAGES_CURRENT" -lt "$HUGEPAGES_NEEDED" ]]; then
-    info "Allocating ${HUGEPAGES_NEEDED} × 2MB huge pages (was ${HUGEPAGES_CURRENT})..."
-    echo "$HUGEPAGES_NEEDED" > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
-    HUGEPAGES_ACTUAL=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages)
-    if [[ "$HUGEPAGES_ACTUAL" -lt "$HUGEPAGES_NEEDED" ]]; then
-        warn "Only got ${HUGEPAGES_ACTUAL} huge pages (wanted ${HUGEPAGES_NEEDED}) — memory may be fragmented"
-    else
-        ok "${HUGEPAGES_ACTUAL} × 2MB huge pages available"
-    fi
-else
-    ok "${HUGEPAGES_CURRENT} × 2MB huge pages already available"
-fi
+info "Hugepage allocation is handled by aleph-compute-node at startup"
+info "Use --memory-limit and --hugepage-headroom to configure"
 
 # ── 5. Start aleph-compute-node ──────────────────────────────────────────────────────
 

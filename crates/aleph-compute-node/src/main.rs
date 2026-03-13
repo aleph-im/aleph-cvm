@@ -68,6 +68,15 @@ struct Cli {
     /// Enable NDP proxy for IPv6 (defaults to true when --ipv6-pool is set).
     #[arg(long)]
     use_ndp_proxy: Option<bool>,
+
+    /// Global memory limit for hugepage-backed VM memory (e.g. "200G", "204800M", "204800").
+    /// Auto-distributed across NUMA nodes. Default: all RAM minus headroom.
+    #[arg(long, value_parser = parse_size_mb)]
+    memory_limit: Option<u32>,
+
+    /// Per-node OS memory headroom (e.g. "4G", "4096M", "4096"). Same on every node.
+    #[arg(long, default_value = "4G", value_parser = parse_size_mb)]
+    hugepage_headroom: u32,
 }
 
 /// Detect the default network interface from /proc/net/route.
@@ -81,6 +90,26 @@ fn detect_default_interface() -> Option<String> {
         }
     }
     None
+}
+
+/// Parse a human-readable size string into megabytes.
+/// Accepts: "4G", "4GB", "4096M", "4096MB", "4096" (plain MB).
+fn parse_size_mb(s: &str) -> Result<u32, String> {
+    let s = s.trim().to_uppercase();
+    let s = s.as_str();
+    if let Some(gb) = s.strip_suffix('G').or_else(|| s.strip_suffix("GB")) {
+        gb.trim()
+            .parse::<u32>()
+            .map_err(|e| e.to_string())
+            .and_then(|g| {
+                g.checked_mul(1024)
+                    .ok_or_else(|| format!("{g}G overflows u32 MB"))
+            })
+    } else if let Some(mb) = s.strip_suffix('M').or_else(|| s.strip_suffix("MB")) {
+        mb.trim().parse::<u32>().map_err(|e| e.to_string())
+    } else {
+        s.parse::<u32>().map_err(|e| e.to_string())
+    }
 }
 
 #[tokio::main]
@@ -112,6 +141,8 @@ async fn main() -> anyhow::Result<()> {
         external_interface = %external_interface,
         ipv6_pool = ?cli.ipv6_pool,
         use_ndp_proxy = %use_ndp_proxy,
+        memory_limit = ?cli.memory_limit,
+        hugepage_headroom = %cli.hugepage_headroom,
         "starting aleph-compute-node"
     );
 
@@ -137,8 +168,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Detect NUMA topology
-    let numa_topology = NumaTopology::detect().context("failed to detect NUMA topology")?;
+    let mut numa_topology = NumaTopology::detect().context("failed to detect NUMA topology")?;
     info!(nodes = numa_topology.num_nodes(), "detected NUMA topology");
+
+    // Allocate 2M hugepages across NUMA nodes
+    let sysfs_base = std::path::Path::new("/sys/devices/system/node");
+    if let Err(e) = aleph_compute_node::hugepages::allocate_hugepages(
+        &mut numa_topology,
+        cli.hugepage_headroom,
+        cli.memory_limit,
+        sysfs_base,
+    ) {
+        tracing::warn!(error = %e, "2M hugepage allocation failed — only 1G-backed VMs will be placeable");
+    }
 
     // Create the VM manager
     let manager = Arc::new(VmManager::new(
@@ -173,4 +215,28 @@ async fn main() -> anyhow::Result<()> {
     info!("orchestrator shut down -- VMs continue running under systemd");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_size_mb() {
+        assert_eq!(parse_size_mb("4G").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4GB").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096M").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096MB").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096").unwrap(), 4096);
+        assert_eq!(parse_size_mb(" 4G ").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4g").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4gb").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096m").unwrap(), 4096);
+        assert_eq!(parse_size_mb("4096mb").unwrap(), 4096);
+    }
+
+    #[test]
+    fn test_parse_size_mb_overflow() {
+        assert!(parse_size_mb("5000000G").is_err());
+    }
 }
