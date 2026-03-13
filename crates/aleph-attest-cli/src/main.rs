@@ -50,10 +50,14 @@ enum Command {
     /// Request fresh attestation with a random nonce (Layer 3)
     FreshAttest(CommonArgs),
 
-    /// Inject secrets into a confidential VM via attested TLS
+    /// Inject secrets into a confidential VM via attested TLS (owner-authenticated)
     InjectSecret {
         #[command(flatten)]
         common: CommonArgs,
+
+        /// Hex-encoded secp256k1 private key for owner authentication
+        #[arg(long)]
+        signing_key: String,
 
         /// Secret to inject as key=value (can be repeated)
         #[arg(long = "secret", value_parser = parse_key_value)]
@@ -88,6 +92,7 @@ async fn main() -> Result<()> {
             println!("Attestation valid: {}", response.attestation_valid);
             println!("Summary:           {}", response.attestation_summary);
             println!("Measurement:       {}", hex::encode(&response.measurement));
+            println!("Host data:         {}", hex::encode(response.host_data));
             println!("HTTP status:       {}", response.status);
             println!("Response body:");
             println!("{}", response.body);
@@ -103,14 +108,22 @@ async fn main() -> Result<()> {
             println!("Fresh attestation verified successfully!");
             println!("  TEE type:     {:?}", report.tee_type);
             println!("  Measurement:  {}", hex::encode(&report.measurement));
+            println!("  Host data:    {}", hex::encode(report.host_data));
             println!("  Report data:  {}", hex::encode(report.report_data));
         }
-        Command::InjectSecret { common, secrets } => {
+        Command::InjectSecret {
+            common,
+            signing_key,
+            secrets,
+        } => {
             let expected = common.parse_expected_measurement()?;
 
             if secrets.is_empty() {
                 anyhow::bail!("at least one --secret key=value is required");
             }
+
+            let sk_bytes =
+                hex::decode(&signing_key).context("--signing-key must be valid hex")?;
 
             println!(
                 "Injecting {} secret(s) into {}...",
@@ -122,6 +135,7 @@ async fn main() -> Result<()> {
                 &common.url,
                 &common.amd_product,
                 expected.as_deref(),
+                &sk_bytes,
                 &secrets,
             )
             .await?;

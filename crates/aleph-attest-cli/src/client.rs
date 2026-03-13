@@ -4,8 +4,10 @@ use std::sync::Arc;
 use aleph_tee::sev_snp::verify::verify_sev_snp_report;
 use aleph_tee::types::AttestationReport;
 use anyhow::{Context, Result, bail};
+use k256::ecdsa::{SigningKey, signature::Signer};
 use rand::Rng;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::verify::SnpCertVerifier;
 
@@ -18,6 +20,8 @@ pub struct AttestedResponse {
     pub attestation_summary: String,
     /// The TEE measurement (launch digest) from the attestation report.
     pub measurement: Vec<u8>,
+    /// The HOSTDATA field from the attestation report.
+    pub host_data: [u8; 32],
     /// The HTTP status code of the response.
     pub status: u16,
     /// The HTTP response body as a string.
@@ -83,6 +87,7 @@ pub async fn attested_request(
         attestation_valid: result.valid,
         attestation_summary: result.summary,
         measurement: result.measurement,
+        host_data: report.host_data,
         status,
         body,
     })
@@ -152,39 +157,51 @@ pub async fn fresh_attestation(
     Ok(report)
 }
 
-/// Inject secrets into a confidential VM via attested TLS.
+/// Challenge response from the attest-agent.
+#[derive(Deserialize)]
+struct ChallengeResponse {
+    nonce: String,
+}
+
+/// Inject secrets into a confidential VM via attested TLS with owner authentication.
 ///
-/// Sends a POST request with a JSON map of key-value secrets to the
-/// `confidential/inject-secret` endpoint. The TLS channel is attested
-/// (and optionally measurement-pinned), so secrets are only ever sent
-/// to a verified TEE.
+/// Protocol:
+/// 1. TLS handshake verifies the VM's attestation report
+/// 2. Verify HOSTDATA matches SHA-256(our pubkey) — confirms we own this VM
+/// 3. GET /confidential/challenge to obtain a nonce
+/// 4. Sign the nonce with our secp256k1 private key
+/// 5. POST /confidential/inject-secret with pubkey, signature, and secrets
 pub async fn inject_secret(
     base_url: &str,
     product: &str,
     expected_measurement: Option<&[u8]>,
+    signing_key_bytes: &[u8],
     secrets: &[(String, String)],
 ) -> Result<InjectSecretResponse> {
     let base = url::Url::parse(base_url).context("failed to parse base URL")?;
-    let inject_url = base
-        .join("confidential/inject-secret")
-        .context("failed to construct inject-secret URL")?;
 
+    // Parse the signing key and derive the public key.
+    let signing_key = SigningKey::from_bytes(signing_key_bytes.into())
+        .context("invalid secp256k1 private key")?;
+    let verifying_key = signing_key.verifying_key();
+    let pubkey_bytes = verifying_key.to_sec1_bytes();
+
+    // Build attested client (verifies TLS cert + attestation).
     let verifier = SnpCertVerifier::new(expected_measurement.map(|m| m.to_vec()));
     let client = build_attested_client(&verifier)?;
 
-    let secrets_map: HashMap<&str, &str> = secrets
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    // 1. Request a challenge nonce (TLS handshake happens here).
+    let challenge_url = base
+        .join("confidential/challenge")
+        .context("failed to construct challenge URL")?;
 
-    let response = client
-        .post(inject_url.as_str())
-        .json(&secrets_map)
+    let challenge_resp = client
+        .get(challenge_url.as_str())
         .send()
         .await
-        .context("failed to send inject-secret request")?;
+        .context("failed to request challenge")?;
 
-    // Verify attestation after TLS handshake.
+    // 2. Verify attestation from TLS handshake.
     let report = verifier
         .get_report()
         .context("no attestation report extracted from TLS handshake")?;
@@ -195,9 +212,59 @@ pub async fn inject_secret(
         bail!("attestation invalid: {}", result.summary);
     }
 
+    // 3. Verify HOSTDATA matches our pubkey.
+    let expected_host_data = Sha256::digest(&pubkey_bytes);
+    if report.host_data != expected_host_data.as_slice() {
+        bail!(
+            "HOSTDATA mismatch: VM is bound to a different owner.\n  Expected: {}\n  Got:      {}",
+            hex::encode(expected_host_data),
+            hex::encode(report.host_data)
+        );
+    }
+
+    // 4. Parse the challenge nonce and sign it.
+    let challenge: ChallengeResponse = challenge_resp
+        .json()
+        .await
+        .context("failed to parse challenge response")?;
+    let nonce_bytes = hex::decode(&challenge.nonce).context("invalid nonce hex")?;
+    let nonce: [u8; 32] = nonce_bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("nonce must be 32 bytes, got {}", v.len()))?;
+
+    let signature: k256::ecdsa::Signature = signing_key.sign(&nonce);
+    let sig_der = signature.to_der();
+
+    // 5. POST the authenticated inject-secret request.
+    let inject_url = base
+        .join("confidential/inject-secret")
+        .context("failed to construct inject-secret URL")?;
+
+    let secrets_map: HashMap<&str, &str> = secrets
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let payload = serde_json::json!({
+        "pubkey": hex::encode(&pubkey_bytes),
+        "signature": hex::encode(sig_der.as_bytes()),
+        "secrets": secrets_map,
+    });
+
+    let response = client
+        .post(inject_url.as_str())
+        .json(&payload)
+        .send()
+        .await
+        .context("failed to send inject-secret request")?;
+
     let status = response.status().as_u16();
     if status == 409 {
         bail!("secrets already injected (409 Conflict)");
+    }
+    if status == 403 {
+        let body = response.text().await.unwrap_or_default();
+        bail!("owner authentication failed (403): {body}");
     }
     if status != 200 {
         let body = response.text().await.unwrap_or_default();
