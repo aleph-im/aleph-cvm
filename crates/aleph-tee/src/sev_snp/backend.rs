@@ -4,7 +4,7 @@ use crate::traits::TeeBackend;
 use crate::types::{AttestationReport, TeeType, VerificationResult, VmConfig};
 
 use super::qemu::{DEFAULT_OVMF_PATH, sev_snp_qemu_args};
-use super::report::{extract_measurement, extract_report_data, parse_sev_snp_report};
+use super::report::{extract_host_data, extract_measurement, extract_report_data, parse_sev_snp_report};
 
 /// SEV-SNP backend implementing the `TeeBackend` trait.
 ///
@@ -110,6 +110,7 @@ impl TeeBackend for SevSnpBackend {
             tee_type: TeeType::SevSnp,
             data: raw.to_vec(),
             report_data: extract_report_data(&parsed),
+            host_data: extract_host_data(&parsed),
             measurement: extract_measurement(&parsed).to_vec(),
         })
     }

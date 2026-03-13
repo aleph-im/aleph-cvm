@@ -62,6 +62,7 @@ mod tests {
                 tee_type: TeeType::SevSnp,
                 data: vec![0xAA; 16],
                 report_data: *report_data,
+                host_data: [0u8; 32],
                 measurement: vec![0xBB; 48],
             })
         }

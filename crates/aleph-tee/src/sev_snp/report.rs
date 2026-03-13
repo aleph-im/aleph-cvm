@@ -36,6 +36,11 @@ pub fn extract_report_data(report: &SevReport) -> [u8; 64] {
     report.inner.report_data
 }
 
+/// Extract the 32-byte host_data field from a parsed report.
+pub fn extract_host_data(report: &SevReport) -> [u8; 32] {
+    report.inner.host_data
+}
+
 /// Extract the 48-byte measurement field from a parsed report.
 pub fn extract_measurement(report: &SevReport) -> [u8; 48] {
     report.inner.measurement
@@ -117,5 +122,30 @@ mod tests {
 
         assert_eq!(extract_report_data(&parsed), [0x42; 64]);
         assert_eq!(extract_measurement(&parsed), [0xAB; 48]);
+    }
+
+    #[test]
+    fn test_host_data_extraction() {
+        use sev::firmware::guest::AttestationReport as SevAR;
+        use sev::parser::Encoder;
+
+        let mut report = SevAR {
+            version: 3,
+            report_data: [0x42; 64],
+            host_data: [0xCD; 32],
+            measurement: [0xAB; 48],
+            cpuid_fam_id: Some(0x19),
+            cpuid_mod_id: Some(0x01),
+            cpuid_step: Some(0x00),
+            ..Default::default()
+        };
+        report.chip_id[0] = 1;
+
+        let mut buf = Vec::new();
+        report.encode(&mut buf, ()).expect("encode should succeed");
+        assert_eq!(buf.len(), REPORT_SIZE);
+
+        let parsed = parse_sev_snp_report(&buf).expect("parse should succeed");
+        assert_eq!(extract_host_data(&parsed), [0xCD; 32]);
     }
 }

@@ -15,6 +15,8 @@ pub struct AttestationReport {
     pub data: Vec<u8>,
     #[serde(with = "hex_serde_array")]
     pub report_data: [u8; 64],
+    #[serde(with = "hex_serde_array_32")]
+    pub host_data: [u8; 32],
     #[serde(with = "hex_serde")]
     pub measurement: Vec<u8>,
 }
@@ -129,6 +131,30 @@ mod hex_serde_array {
     }
 }
 
+/// Serde helper for hex-encoding `[u8; 32]` fields.
+mod hex_serde_array_32 {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+        let array: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected exactly 32 bytes"))?;
+        Ok(array)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +183,7 @@ mod tests {
             tee_type: TeeType::SevSnp,
             data: vec![0xde, 0xad, 0xbe, 0xef],
             report_data: [0x42; 64],
+            host_data: [0x99; 32],
             measurement: vec![0x01, 0x02, 0x03],
         };
 
@@ -166,11 +193,13 @@ mod tests {
         assert_eq!(deserialized.tee_type, report.tee_type);
         assert_eq!(deserialized.data, report.data);
         assert_eq!(deserialized.report_data, report.report_data);
+        assert_eq!(deserialized.host_data, report.host_data);
         assert_eq!(deserialized.measurement, report.measurement);
 
         // Verify hex encoding is present in the JSON
         assert!(json.contains("deadbeef"));
         assert!(json.contains(&"42".repeat(64)));
+        assert!(json.contains(&"99".repeat(32)));
         assert!(json.contains("010203"));
     }
 

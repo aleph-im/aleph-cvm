@@ -23,6 +23,7 @@ impl TeeBackend for MockTeeBackend {
             tee_type: TeeType::SevSnp,
             data: vec![0u8; 64],
             report_data: *report_data,
+            host_data: [0u8; 32],
             measurement: vec![0xAB; 48],
         })
     }
@@ -46,6 +47,7 @@ impl TeeBackend for MockTeeBackend {
             tee_type: TeeType::SevSnp,
             data: raw.to_vec(),
             report_data: [0u8; 64],
+            host_data: [0u8; 32],
             measurement: vec![0xAB; 48],
         })
     }
