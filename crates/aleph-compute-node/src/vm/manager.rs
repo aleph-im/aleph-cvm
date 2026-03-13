@@ -247,6 +247,9 @@ impl VmManager {
             info!(vm_id = %vm_id, "LUKS encrypted rootfs mode");
             verity::build_kernel_cmdline(None, None, true)
         } else if let Some(rootfs_disk) = config.disks.first() {
+            // Check for a workload volume before mutating the disk list.
+            let has_workload_disk = config.disks.len() > 1;
+
             let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
                 "dm-verity setup failed — refusing to boot without integrity verification",
             )?;
@@ -260,10 +263,10 @@ impl VmManager {
                 },
             );
 
-            // If a workload volume is present (originally the second disk, now at
+            // If a workload volume was present (originally the second disk, now at
             // index 2 after rootfs hashtree insertion), compute verity for it too.
-            let workload_roothash = if config.disks.len() > 2 {
-                let workload_disk = &config.disks[2];
+            let workload_roothash = if has_workload_disk {
+                let workload_disk = &config.disks[2]; // index shifted by hashtree insertion
                 let winfo = verity::ensure_verity(&workload_disk.path)
                     .context("dm-verity setup failed for workload volume")?;
                 let wl_hash = winfo.root_hash.clone();

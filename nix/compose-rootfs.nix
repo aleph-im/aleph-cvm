@@ -54,6 +54,7 @@ export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
 /bin/busybox mount -t tmpfs tmpfs /dev/shm
 
 # Containers need cgroup v2.
+# /sys is bind-mounted by the outer initrd prepare_chroot.
 /bin/busybox mount -t cgroup2 cgroup2 /sys/fs/cgroup
 
 # Load FUSE kernel module for fuse-overlayfs (container layer storage).

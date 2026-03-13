@@ -151,7 +151,7 @@ if [[ "$SNP_ENABLED" != "Y" && "$SNP_ENABLED" != "1" ]]; then
 fi
 ok "SEV-SNP enabled"
 
-for bin in qemu-system-x86_64 dnsmasq curl ip veritysetup; do
+for bin in qemu-system-x86_64 dnsmasq curl ip veritysetup python3; do
     if ! command -v "$bin" &>/dev/null; then
         fail "Required binary not found: $bin"
         exit 1
@@ -225,6 +225,7 @@ DNSMASQ_ARGS=(
 )
 
 if [[ -n "$IPV6_POOL" ]]; then
+    # RA signalling only — actual IPv6 assignment is handled by aleph-compute-node.
     DNSMASQ_ARGS+=(
         --enable-ra
         "--dhcp-range=::,static,ra-stateful"

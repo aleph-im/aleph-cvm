@@ -42,6 +42,7 @@ else
 fi
 
 # Parse boot mode from kernel command line.
+# \b prevents matching 'workload_roothash=' when extracting 'roothash='.
 roothash=$(/bin/busybox sed -n 's/.*\broothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
 workload_roothash=$(/bin/busybox sed -n 's/.*workload_roothash=\([0-9a-fA-F]*\).*/\1/p' /proc/cmdline)
 luks=$(/bin/busybox sed -n 's/.*luks=\([^ ]*\).*/\1/p' /proc/cmdline)
