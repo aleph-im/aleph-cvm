@@ -3,6 +3,7 @@
 //! Matches the response schema of aleph-vm's `GET /about/usage/system`.
 
 use anyhow::{Context, Result};
+use memsizes::{Bytes, KB, KiB, MemorySize, Rounding};
 use serde::Serialize;
 use std::path::Path;
 use std::time::SystemTime;
@@ -42,17 +43,17 @@ pub struct CoreFrequencies {
 #[derive(Debug, Serialize)]
 pub struct MemoryUsage {
     #[serde(rename = "total_kB")]
-    pub total_kb: u64,
+    pub total_kb: KB,
     #[serde(rename = "available_kB")]
-    pub available_kb: u64,
+    pub available_kb: KB,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DiskUsage {
     #[serde(rename = "total_kB")]
-    pub total_kb: u64,
+    pub total_kb: KB,
     #[serde(rename = "available_kB")]
-    pub available_kb: u64,
+    pub available_kb: KB,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,14 +121,17 @@ pub fn parse_load_average(loadavg: &str) -> Result<LoadAverage> {
 }
 
 /// Parse MemTotal and MemAvailable from /proc/meminfo content.
+///
+/// /proc/meminfo reports values in KiB (binary). We convert to decimal KB
+/// (via bytes) to match aleph-vm's `psutil.virtual_memory().total / 1000`.
 pub fn parse_meminfo(meminfo: &str) -> Result<MemoryUsage> {
     let mut total = None;
     let mut available = None;
     for line in meminfo.lines() {
         if let Some(val) = line.strip_prefix("MemTotal:") {
-            total = Some(parse_kb_value(val)?);
+            total = Some(parse_kib_as_kb(val, Rounding::Ceil)?);
         } else if let Some(val) = line.strip_prefix("MemAvailable:") {
-            available = Some(parse_kb_value(val)?);
+            available = Some(parse_kib_as_kb(val, Rounding::Floor)?);
         }
     }
     Ok(MemoryUsage {
@@ -136,12 +140,19 @@ pub fn parse_meminfo(meminfo: &str) -> Result<MemoryUsage> {
     })
 }
 
-fn parse_kb_value(val: &str) -> Result<u64> {
-    val.split_whitespace()
+/// Parse a KiB integer from /proc/meminfo and convert to decimal KB.
+fn parse_kib_as_kb(val: &str, rounding: Rounding) -> Result<KB> {
+    let kib_value: u64 = val
+        .split_whitespace()
         .next()
         .context("empty value")?
         .parse()
-        .context("invalid integer")
+        .context("invalid integer")?;
+    let kib = KiB::from_units(kib_value);
+    let bytes = Bytes::from(kib);
+    bytes
+        .to_rounded::<KB>(rounding)
+        .context("KiB to KB conversion overflow")
 }
 
 /// Parse CPU frequency from sysfs (MHz). Returns (min, max).
@@ -225,11 +236,16 @@ pub fn disk_usage(path: &Path) -> Result<DiskUsage> {
             std::io::Error::last_os_error()
         );
     }
-    // Divide by 1000 (not 1024) to match aleph-vm's psutil-based convention.
     let frsize = stat.f_frsize as u64;
+    let total_bytes = Bytes::from_units(stat.f_blocks * frsize);
+    let avail_bytes = Bytes::from_units(stat.f_bavail * frsize);
     Ok(DiskUsage {
-        total_kb: stat.f_blocks * frsize / 1000,
-        available_kb: stat.f_bavail * frsize / 1000,
+        total_kb: total_bytes
+            .to_rounded::<KB>(Rounding::Floor)
+            .context("disk total overflow")?,
+        available_kb: avail_bytes
+            .to_rounded::<KB>(Rounding::Floor)
+            .context("disk available overflow")?,
     })
 }
 
@@ -382,8 +398,13 @@ MemAvailable:    8192000 kB
 Buffers:          456000 kB
 ";
         let result = parse_meminfo(meminfo).unwrap();
-        assert_eq!(result.total_kb, 16384000);
-        assert_eq!(result.available_kb, 8192000);
+        // /proc/meminfo reports KiB; converted to decimal KB (× 1024 / 1000)
+        // 16384000 KiB = 16384000 * 1024 bytes = 16777216000 bytes
+        // ceil(16777216000 / 1000) = 16777216 KB (divides evenly)
+        assert_eq!(result.total_kb, KB::from_units(16777216));
+        // 8192000 KiB = 8192000 * 1024 bytes = 8388608000 bytes
+        // floor(8388608000 / 1000) = 8388608 KB (Floor for available)
+        assert_eq!(result.available_kb, KB::from_units(8388608));
     }
 
     #[test]
@@ -395,8 +416,8 @@ Buffers:          456000 kB
     #[test]
     fn test_disk_usage_on_tmp() {
         let usage = disk_usage(Path::new("/tmp")).unwrap();
-        assert!(usage.total_kb > 0);
-        assert!(usage.available_kb > 0);
+        assert!(usage.total_kb.units() > 0);
+        assert!(usage.available_kb.units() > 0);
         assert!(usage.total_kb >= usage.available_kb);
     }
 
@@ -452,12 +473,12 @@ Buffers:          456000 kB
                 },
             },
             mem: MemoryUsage {
-                total_kb: 16000000,
-                available_kb: 8000000,
+                total_kb: KB::from_units(16000000),
+                available_kb: KB::from_units(8000000),
             },
             disk: DiskUsage {
-                total_kb: 500000000,
-                available_kb: 250000000,
+                total_kb: KB::from_units(500000000),
+                available_kb: KB::from_units(250000000),
             },
             period: UsagePeriod {
                 start_timestamp: "2024-01-15T12:00:00+00:00".to_string(),
