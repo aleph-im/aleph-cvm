@@ -19,7 +19,9 @@ use aleph_scheduler_agent::aleph::messages::{ExecutableMessage, ItemHash};
 use aleph_scheduler_agent::aleph::node_hash;
 use aleph_scheduler_agent::aleph::volumes::VolumeCache;
 use aleph_scheduler_agent::client::connect_compute_node;
-use aleph_scheduler_agent::status::config::CrnConfig;
+use aleph_scheduler_agent::status::config::{
+    ComputingConfig, CrnConfig, NetworkingConfig, PaymentConfig,
+};
 use aleph_scheduler_agent::status::executions::map_executions;
 use aleph_scheduler_agent::status::usage::collect_usage;
 
@@ -510,11 +512,24 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
     let cache_dir = args.cache_dir.clone();
     let crn_config = CrnConfig {
-        enable_confidential_computing: args.enable_confidential_computing,
-        ipv6_support: args.ipv6_address_pool.is_some(),
-        gpu_support: false,
-        payment_receiver_address: args.payment_receiver_address.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        networking: NetworkingConfig {
+            ipv6_address_pool: args.ipv6_address_pool.clone(),
+            ipv6_allocation_policy: None,
+            ipv6_subnet_prefix: None,
+            ipv6_forwarding_enabled: None,
+            use_ndp_proxy: None,
+        },
+        payment: args
+            .payment_receiver_address
+            .as_ref()
+            .map(|addr| PaymentConfig {
+                payment_receiver_address: Some(addr.clone()),
+            }),
+        computing: Some(ComputingConfig {
+            enable_gpu_support: false,
+            enable_confidential_computing: args.enable_confidential_computing,
+        }),
     };
 
     let state = Arc::new(AppState {
