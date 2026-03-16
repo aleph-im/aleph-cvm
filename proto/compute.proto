@@ -16,12 +16,12 @@ service ComputeNode {
 
 message CreateVmRequest {
   string vm_id = 1;
-  string kernel = 2;
-  string initrd = 3;
+  string kernel = 2;       // empty = disk boot (no direct kernel boot)
+  string initrd = 3;       // empty = disk boot
   repeated DiskConfig disks = 4;
   uint32 vcpus = 5;
   uint32 memory_mb = 6;
-  TeeConfig tee = 7;
+  TeeConfig tee = 7;       // backend "none" = non-confidential
   string ipv6_address = 8;      // requested IPv6 (empty = random from pool)
   uint32 ipv6_prefix_len = 9;   // requested prefix length (0 = /128)
   // true = LUKS encrypted rootfs (skip dm-verity, user injects key via attest-agent)
@@ -36,7 +36,7 @@ message DiskConfig {
 }
 
 message TeeConfig {
-  string backend = 1; // "sev-snp", "tdx", "nvidia-cc"
+  string backend = 1; // "sev-snp", "tdx", "nvidia-cc", "none"
   string policy = 2;  // empty string means default
 }
 

@@ -42,6 +42,8 @@ pub fn sev_snp_qemu_args(config: &VmConfig, ovmf_path: &str) -> Vec<String> {
     );
 
     vec![
+        "-cpu".to_string(),
+        "EPYC-v4".to_string(),
         "-machine".to_string(),
         "q35,confidential-guest-support=sev0,memory-backend=ram1,vmport=off".to_string(),
         "-object".to_string(),
@@ -67,8 +69,8 @@ mod tests {
     fn make_config(memory_mb: u32, policy: Option<&str>) -> VmConfig {
         VmConfig {
             vm_id: "test-vm".to_string(),
-            kernel: PathBuf::from("/boot/vmlinuz"),
-            initrd: PathBuf::from("/boot/initrd.img"),
+            kernel: Some(PathBuf::from("/boot/vmlinuz")),
+            initrd: Some(PathBuf::from("/boot/initrd.img")),
             disks: vec![],
             vcpus: 2,
             memory_mb,
@@ -144,12 +146,14 @@ mod tests {
         let config = make_config(1024, None);
         let args = sev_snp_qemu_args(&config, DEFAULT_OVMF_PATH);
 
-        // -machine <val>, -object <val>, -object <val>, -nodefaults, -bios <val>
-        assert_eq!(args.len(), 9, "expected 9 args, got {}", args.len());
-        assert_eq!(args[0], "-machine");
-        assert!(args[1].contains("q35"));
-        assert!(args[1].contains("confidential-guest-support=sev0"));
-        assert!(args[1].contains("memory-backend=ram1"));
+        // -cpu <val>, -machine <val>, -object <val>, -object <val>, -nodefaults, -bios <val>
+        assert_eq!(args.len(), 11, "expected 11 args, got {}", args.len());
+        assert_eq!(args[0], "-cpu");
+        assert_eq!(args[1], "EPYC-v4");
+        assert_eq!(args[2], "-machine");
+        assert!(args[3].contains("q35"));
+        assert!(args[3].contains("confidential-guest-support=sev0"));
+        assert!(args[3].contains("memory-backend=ram1"));
     }
 
     #[test]

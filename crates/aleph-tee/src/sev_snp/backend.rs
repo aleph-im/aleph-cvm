@@ -138,8 +138,8 @@ mod tests {
         let backend = SevSnpBackend::new("Milan");
         let config = VmConfig {
             vm_id: "test".to_string(),
-            kernel: PathBuf::from("/boot/vmlinuz"),
-            initrd: PathBuf::from("/boot/initrd.img"),
+            kernel: Some(PathBuf::from("/boot/vmlinuz")),
+            initrd: Some(PathBuf::from("/boot/initrd.img")),
             disks: vec![],
             vcpus: 2,
             memory_mb: 2048,

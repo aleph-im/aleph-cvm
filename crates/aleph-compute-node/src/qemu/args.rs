@@ -32,15 +32,13 @@ pub fn build_qemu_command(
     tap_name: &str,
     tee_backend: &dyn TeeBackend,
     mac_addr: &str,
-    kernel_cmdline: &str,
+    kernel_cmdline: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
-    // Base args
+    // Base args (no CPU — each backend provides its own via qemu_args)
     args.extend([
         "-enable-kvm".into(),
-        "-cpu".into(),
-        "EPYC-v4".into(),
         "-smp".into(),
         config.vcpus.to_string(),
         "-m".into(),
@@ -49,15 +47,20 @@ pub fn build_qemu_command(
         "-no-reboot".into(),
     ]);
 
-    // Kernel direct boot with fixed command line
-    args.extend([
-        "-kernel".into(),
-        config.kernel.display().to_string(),
-        "-initrd".into(),
-        config.initrd.display().to_string(),
-        "-append".into(),
-        kernel_cmdline.into(),
-    ]);
+    // Kernel direct boot (when kernel+initrd provided) or disk boot
+    if let (Some(kernel), Some(initrd)) = (&config.kernel, &config.initrd) {
+        args.extend([
+            "-kernel".into(),
+            kernel.display().to_string(),
+            "-initrd".into(),
+            initrd.display().to_string(),
+        ]);
+        if let Some(cmdline) = kernel_cmdline {
+            args.extend(["-append".into(), cmdline.into()]);
+        }
+    } else {
+        args.extend(["-boot".into(), "order=c".into()]);
+    }
 
     // Serial output to stdout (captured by journald when running under systemd)
     args.extend(["-serial".into(), "stdio".into()]);
@@ -117,8 +120,8 @@ mod tests {
     fn make_config(disks: Vec<DiskConfig>) -> VmConfig {
         VmConfig {
             vm_id: "test-vm-001".into(),
-            kernel: PathBuf::from("/boot/vmlinuz"),
-            initrd: PathBuf::from("/boot/initrd.img"),
+            kernel: Some(PathBuf::from("/boot/vmlinuz")),
+            initrd: Some(PathBuf::from("/boot/initrd.img")),
             disks,
             vcpus: 4,
             memory_mb: 2048,
@@ -145,7 +148,14 @@ mod tests {
         let config = make_config(vec![rootfs_disk("/images/rootfs.ext4")]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         let kernel_idx = args
             .iter()
@@ -159,7 +169,14 @@ mod tests {
         let config = make_config(vec![]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         let append_idx = args
             .iter()
@@ -177,7 +194,14 @@ mod tests {
         let config = make_config(vec![]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         let device_arg = args
             .iter()
@@ -194,7 +218,14 @@ mod tests {
         let config = make_config(vec![]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         assert!(
             args.iter().any(|a| a.contains("sev-snp-guest")),
@@ -207,7 +238,14 @@ mod tests {
         let config = make_config(vec![]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         assert!(
             !args.iter().any(|a| a.contains("-drive")),
@@ -232,7 +270,14 @@ mod tests {
         let config = make_config(disks);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, TEST_CMDLINE);
+        let args = build_qemu_command(
+            &config,
+            &paths,
+            "tap0",
+            &backend,
+            TEST_MAC,
+            Some(TEST_CMDLINE),
+        );
 
         let drive_args: Vec<&String> = args
             .iter()
@@ -254,7 +299,7 @@ mod tests {
         let config = make_config(vec![]);
         let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
         let backend = SevSnpBackend::new("Genoa");
-        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, cmdline);
+        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, Some(cmdline));
 
         let append_idx = args
             .iter()
@@ -271,5 +316,53 @@ mod tests {
             paths.qmp_socket,
             PathBuf::from("/run/aleph-cvm/my-vm/qmp.sock")
         );
+    }
+
+    #[test]
+    fn test_build_command_disk_boot_no_kernel() {
+        use aleph_tee::none::NoTeeBackend;
+        use aleph_tee::types::TeeType;
+
+        let config = VmConfig {
+            vm_id: "test-vm-001".into(),
+            kernel: None,
+            initrd: None,
+            disks: vec![DiskConfig {
+                path: PathBuf::from("/images/ubuntu.qcow2"),
+                readonly: false,
+                format: "qcow2".to_string(),
+            }],
+            vcpus: 4,
+            memory_mb: 2048,
+            tee: TeeConfig {
+                backend: TeeType::None,
+                policy: None,
+            },
+            encrypted: false,
+            numa_node: None,
+            hugepage_size: None,
+        };
+        let paths = QemuPaths::for_vm("/run/aleph-cvm".as_ref(), "test-vm-001");
+        let backend = NoTeeBackend;
+        let args = build_qemu_command(&config, &paths, "tap0", &backend, TEST_MAC, None);
+
+        // Should NOT have -kernel, -initrd, -append
+        assert!(!args.iter().any(|a| a == "-kernel"), "no -kernel: {args:?}");
+        assert!(!args.iter().any(|a| a == "-initrd"), "no -initrd: {args:?}");
+        assert!(!args.iter().any(|a| a == "-append"), "no -append: {args:?}");
+
+        // Should have -boot order=c
+        let boot_idx = args
+            .iter()
+            .position(|a| a == "-boot")
+            .expect("-boot missing");
+        assert_eq!(args[boot_idx + 1], "order=c");
+
+        // Should have -cpu host (from NoTeeBackend)
+        let cpu_idx = args.iter().position(|a| a == "-cpu").expect("-cpu missing");
+        assert_eq!(args[cpu_idx + 1], "host");
+
+        // Should NOT have sev-snp-guest
+        assert!(!args.iter().any(|a| a.contains("sev-snp-guest")));
     }
 }

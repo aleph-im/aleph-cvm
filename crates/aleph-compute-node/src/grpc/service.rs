@@ -158,6 +158,7 @@ fn parse_tee_config(
         "sev-snp" | "" => TeeType::SevSnp,
         "tdx" => TeeType::Tdx,
         "nvidia-cc" => TeeType::NvidiaCc,
+        "none" => TeeType::None,
         other => {
             return Err(Status::invalid_argument(format!(
                 "unknown TEE backend: {other}"
@@ -194,9 +195,42 @@ impl ComputeNode for ComputeNodeService {
 
         // Validate inputs
         validate_vm_id(&req.vm_id)?;
-        validate_file_path(&req.kernel, "kernel")?;
-        validate_file_path(&req.initrd, "initrd")?;
+
+        // Parse TEE config first (need it for validation decisions)
+        let tee = parse_tee_config(req.tee)?;
+
+        // Kernel/initrd: required for confidential VMs, optional for TeeType::None
+        let kernel = if req.kernel.is_empty() {
+            if tee.backend != TeeType::None {
+                return Err(Status::invalid_argument(
+                    "kernel is required for confidential VMs",
+                ));
+            }
+            None
+        } else {
+            validate_file_path(&req.kernel, "kernel")?;
+            Some(req.kernel.into())
+        };
+
+        let initrd = if req.initrd.is_empty() {
+            if tee.backend != TeeType::None {
+                return Err(Status::invalid_argument(
+                    "initrd is required for confidential VMs",
+                ));
+            }
+            None
+        } else {
+            validate_file_path(&req.initrd, "initrd")?;
+            Some(req.initrd.into())
+        };
+
         validate_vm_resources(req.vcpus, req.memory_mb)?;
+
+        if tee.backend == TeeType::None && req.encrypted {
+            return Err(Status::invalid_argument(
+                "encrypted mode is not supported for non-confidential VMs",
+            ));
+        }
 
         for d in &req.disks {
             validate_file_path(&d.path, "disk path")?;
@@ -219,7 +253,12 @@ impl ComputeNode for ComputeNodeService {
             }
         }
 
-        let tee = parse_tee_config(req.tee)?;
+        // Non-confidential disk-boot VMs must have at least one disk
+        if kernel.is_none() && req.disks.is_empty() {
+            return Err(Status::invalid_argument(
+                "at least one disk is required for disk-boot VMs (no kernel specified)",
+            ));
+        }
 
         let disks = req
             .disks
@@ -261,8 +300,8 @@ impl ComputeNode for ComputeNodeService {
 
         let config = VmConfig {
             vm_id: req.vm_id,
-            kernel: req.kernel.into(),
-            initrd: req.initrd.into(),
+            kernel,
+            initrd,
             disks,
             vcpus: req.vcpus,
             memory_mb: req.memory_mb,

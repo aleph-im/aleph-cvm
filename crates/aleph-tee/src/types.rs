@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TeeType {
     SevSnp,
     Tdx,
     NvidiaCc,
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,8 +62,10 @@ pub enum HugePageSize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
     pub vm_id: String,
-    pub kernel: std::path::PathBuf,
-    pub initrd: std::path::PathBuf,
+    #[serde(default)]
+    pub kernel: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub initrd: Option<std::path::PathBuf>,
     #[serde(default)]
     pub disks: Vec<DiskConfig>,
     pub vcpus: u32,
@@ -194,8 +197,14 @@ mod tests {
 
         let config: VmConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.vm_id, "test-vm-001");
-        assert_eq!(config.kernel, std::path::PathBuf::from("/boot/vmlinuz"));
-        assert_eq!(config.initrd, std::path::PathBuf::from("/boot/initrd.img"));
+        assert_eq!(
+            config.kernel,
+            Some(std::path::PathBuf::from("/boot/vmlinuz"))
+        );
+        assert_eq!(
+            config.initrd,
+            Some(std::path::PathBuf::from("/boot/initrd.img"))
+        );
         assert_eq!(config.disks.len(), 2);
         assert_eq!(
             config.disks[0].path,
@@ -241,5 +250,49 @@ mod tests {
         let disk: DiskConfig = serde_json::from_str(json).unwrap();
         assert!(disk.readonly); // default true
         assert_eq!(disk.format, "raw"); // default raw
+    }
+
+    #[test]
+    fn test_tee_type_none_serialization() {
+        let json = serde_json::to_string(&TeeType::None).unwrap();
+        assert_eq!(json, "\"none\"");
+        let deserialized: TeeType = serde_json::from_str("\"none\"").unwrap();
+        assert_eq!(deserialized, TeeType::None);
+    }
+
+    #[test]
+    fn test_vm_config_optional_kernel() {
+        let json = r#"{
+            "vm_id": "test-vm",
+            "disks": [{"path": "/images/ubuntu.qcow2", "readonly": false, "format": "qcow2"}],
+            "vcpus": 2,
+            "memory_mb": 2048,
+            "tee": {"backend": "none"}
+        }"#;
+        let config: VmConfig = serde_json::from_str(json).unwrap();
+        assert!(config.kernel.is_none());
+        assert!(config.initrd.is_none());
+        assert_eq!(config.tee.backend, TeeType::None);
+    }
+
+    #[test]
+    fn test_vm_config_backward_compat_with_kernel() {
+        let json = r#"{
+            "vm_id": "test-vm",
+            "kernel": "/boot/vmlinuz",
+            "initrd": "/boot/initrd.img",
+            "vcpus": 2,
+            "memory_mb": 2048,
+            "tee": {"backend": "sev-snp", "policy": "0x30000"}
+        }"#;
+        let config: VmConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.kernel.unwrap(),
+            std::path::PathBuf::from("/boot/vmlinuz")
+        );
+        assert_eq!(
+            config.initrd.unwrap(),
+            std::path::PathBuf::from("/boot/initrd.img")
+        );
     }
 }
