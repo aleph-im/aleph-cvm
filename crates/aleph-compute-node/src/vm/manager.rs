@@ -255,6 +255,7 @@ impl VmManager {
         let encrypted = config.encrypted;
         let kernel_cmdline = if !is_confidential {
             // Non-confidential: no kernel cmdline (disk boot)
+            warn!(vm_id = %vm_id, "non-confidential VM: dm-verity integrity verification is not available");
             None
         } else if encrypted {
             // LUKS mode: skip dm-verity, user will inject key via attest-agent.

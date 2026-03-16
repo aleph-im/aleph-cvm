@@ -201,7 +201,9 @@ impl NumaAllocator {
             }
 
             if !uses_hugepages {
-                // Non-confidential VMs: skip hugepage accounting.
+                // Non-confidential VMs use regular RAM, not hugepages.
+                // Memory capacity is not tracked here — only vCPU allocation is enforced.
+                // This allows non-confidential VMs to run when hugepage capacity is exhausted.
                 self.allocated_vcpus[idx] += vcpus;
                 return Ok(NumaPlacement {
                     node: node.id,

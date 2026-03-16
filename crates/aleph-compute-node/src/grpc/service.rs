@@ -226,6 +226,12 @@ impl ComputeNode for ComputeNodeService {
 
         validate_vm_resources(req.vcpus, req.memory_mb)?;
 
+        if tee.backend == TeeType::None && req.encrypted {
+            return Err(Status::invalid_argument(
+                "encrypted mode is not supported for non-confidential VMs",
+            ));
+        }
+
         for d in &req.disks {
             validate_file_path(&d.path, "disk path")?;
             // Validate disk format against allowlist to prevent QEMU parameter injection.

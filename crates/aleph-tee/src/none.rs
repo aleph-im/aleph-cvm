@@ -98,5 +98,18 @@ mod tests {
                 .contains("attestation not available: VM is not running in a TEE"),
             "parse_report error: {err}"
         );
+
+        let dummy_report = AttestationReport {
+            tee_type: TeeType::None,
+            data: vec![0u8; 64],
+            report_data: [0u8; 64],
+            measurement: vec![0u8; 48],
+        };
+        let err = backend.verify_report(&dummy_report).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("attestation not available: VM is not running in a TEE"),
+            "verify_report error: {err}"
+        );
     }
 }
