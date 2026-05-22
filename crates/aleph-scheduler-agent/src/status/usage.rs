@@ -15,7 +15,6 @@ pub struct MachineUsage {
     pub disk: DiskUsage,
     pub period: UsagePeriod,
     pub properties: MachineProperties,
-    #[serde(skip_serializing_if = "GpuProperties::is_empty")]
     pub gpu: GpuProperties,
     pub active: bool,
 }
@@ -71,22 +70,13 @@ pub struct MachineProperties {
 pub struct CpuProperties {
     pub architecture: String,
     pub vendor: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct GpuProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub devices: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub available_devices: Option<Vec<serde_json::Value>>,
-}
-
-impl GpuProperties {
-    fn is_empty(&self) -> bool {
-        self.devices.is_none() && self.available_devices.is_none()
-    }
+    pub devices: Vec<serde_json::Value>,
+    pub available_devices: Vec<serde_json::Value>,
 }
 
 /// Count processors from /proc/cpuinfo content.
@@ -250,15 +240,15 @@ pub fn disk_usage(path: &Path) -> Result<DiskUsage> {
 }
 
 /// Format a SystemTime as ISO 8601 UTC string, truncated to the current minute.
+///
+/// Uses the `Z` suffix to match aleph-vm's pydantic v2 default datetime serialization.
 fn format_period_timestamp(t: SystemTime) -> String {
     let dur = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
     let total_secs = dur.as_secs();
-    // Truncate to start of the current minute
     let truncated = total_secs - (total_secs % 60);
 
-    // Manual UTC formatting (avoids chrono dependency)
     let (year, month, day, hour, min) = unix_to_utc(truncated);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:00+00:00")
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:00Z")
 }
 
 /// Convert a unix timestamp to (year, month, day, hour, minute) in UTC.
@@ -320,8 +310,8 @@ pub async fn collect_usage(disk_path: &Path) -> Result<MachineUsage> {
             },
         },
         gpu: GpuProperties {
-            devices: None,
-            available_devices: None,
+            devices: Vec::new(),
+            available_devices: Vec::new(),
         },
         active: true,
     })
@@ -426,7 +416,7 @@ Buffers:          456000 kB
         // 2024-01-15 11:34:56 UTC → truncate to 11:34:00
         let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1705318496);
         let ts = format_period_timestamp(t);
-        assert_eq!(ts, "2024-01-15T11:34:00+00:00");
+        assert_eq!(ts, "2024-01-15T11:34:00Z");
     }
 
     #[test]
@@ -440,21 +430,6 @@ Buffers:          456000 kB
         // 2024-03-15 09:30:00 UTC = 1710495000
         let (y, m, d, h, min) = unix_to_utc(1710495000);
         assert_eq!((y, m, d, h, min), (2024, 3, 15, 9, 30));
-    }
-
-    #[test]
-    fn test_gpu_properties_is_empty() {
-        let empty = GpuProperties {
-            devices: None,
-            available_devices: None,
-        };
-        assert!(empty.is_empty());
-
-        let non_empty = GpuProperties {
-            devices: Some(vec![]),
-            available_devices: None,
-        };
-        assert!(!non_empty.is_empty());
     }
 
     #[test]
@@ -481,7 +456,7 @@ Buffers:          456000 kB
                 available_kb: KB::from_units(250000000),
             },
             period: UsagePeriod {
-                start_timestamp: "2024-01-15T12:00:00+00:00".to_string(),
+                start_timestamp: "2024-01-15T12:00:00Z".to_string(),
                 duration_seconds: 60.0,
             },
             properties: MachineProperties {
@@ -492,8 +467,8 @@ Buffers:          456000 kB
                 },
             },
             gpu: GpuProperties {
-                devices: None,
-                available_devices: None,
+                devices: Vec::new(),
+                available_devices: Vec::new(),
             },
             active: true,
         };
@@ -503,7 +478,52 @@ Buffers:          456000 kB
         assert_eq!(json["period"]["duration_seconds"], 60.0);
         assert_eq!(json["properties"]["cpu"]["architecture"], "x86_64");
         assert_eq!(json["active"], true);
-        // gpu should be omitted when empty
-        assert!(json.get("gpu").is_none());
+        // gpu and features are always present (matches aleph-vm wire format)
+        assert!(json["gpu"]["devices"].is_array());
+        assert!(json["gpu"]["available_devices"].is_array());
+        assert!(json["properties"]["cpu"]["features"].is_array());
+    }
+
+    #[test]
+    fn test_empty_features_serialized_as_array() {
+        let usage = MachineUsage {
+            cpu: CpuUsage {
+                count: 1,
+                load_average: LoadAverage {
+                    load1: 0.0,
+                    load5: 0.0,
+                    load15: 0.0,
+                },
+                core_frequencies: CoreFrequencies { min: 0.0, max: 0.0 },
+            },
+            mem: MemoryUsage {
+                total_kb: KB::from_units(0),
+                available_kb: KB::from_units(0),
+            },
+            disk: DiskUsage {
+                total_kb: KB::from_units(0),
+                available_kb: KB::from_units(0),
+            },
+            period: UsagePeriod {
+                start_timestamp: "2024-01-15T12:00:00Z".to_string(),
+                duration_seconds: 60.0,
+            },
+            properties: MachineProperties {
+                cpu: CpuProperties {
+                    architecture: "x86_64".to_string(),
+                    vendor: "GenuineIntel".to_string(),
+                    features: vec![],
+                },
+            },
+            gpu: GpuProperties {
+                devices: Vec::new(),
+                available_devices: Vec::new(),
+            },
+            active: true,
+        };
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["properties"]["cpu"]["features"], serde_json::json!([]));
+        assert_eq!(json["gpu"]["devices"], serde_json::json!([]));
+        assert_eq!(json["gpu"]["available_devices"], serde_json::json!([]));
     }
 }

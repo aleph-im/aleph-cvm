@@ -20,7 +20,8 @@ use aleph_scheduler_agent::aleph::node_hash;
 use aleph_scheduler_agent::aleph::volumes::VolumeCache;
 use aleph_scheduler_agent::client::connect_compute_node;
 use aleph_scheduler_agent::status::config::{
-    ComputingConfig, CrnConfig, NetworkingConfig, PaymentConfig,
+    ComputingConfig, CrnConfig, DebugConfig, NetworkingConfig, PaymentConfig, ReferencesConfig,
+    SecurityConfig, default_available_payments,
 };
 use aleph_scheduler_agent::status::executions::map_executions;
 use aleph_scheduler_agent::status::usage::collect_usage;
@@ -341,7 +342,9 @@ async fn get_executions(state: web::Data<Arc<AppState>>) -> HttpResponse {
 
 /// GET /status/config — node capabilities.
 async fn get_config(state: web::Data<Arc<AppState>>) -> HttpResponse {
-    HttpResponse::Ok().json(&state.crn_config)
+    let mut config = state.crn_config.clone();
+    config.node_hash = state.node_hash.read().await.as_ref().map(|h| h.to_string());
+    HttpResponse::Ok().json(config)
 }
 
 // ─── Node hash discovery background task ────────────────────────────────────
@@ -511,25 +514,48 @@ async fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // ── Build app state and start HTTP server ────────────────────────────
 
     let cache_dir = args.cache_dir.clone();
+    let ipv6_pool = args.ipv6_address_pool.clone().unwrap_or_default();
+    let ipv6_enabled = !ipv6_pool.is_empty();
     let crn_config = CrnConfig {
+        domain_name: args.domain_name.clone().unwrap_or_default(),
+        // Populated dynamically at request time from the discovery task.
+        node_hash: None,
         version: env!("CARGO_PKG_VERSION").to_string(),
-        networking: NetworkingConfig {
-            ipv6_address_pool: args.ipv6_address_pool.clone(),
-            ipv6_allocation_policy: None,
-            ipv6_subnet_prefix: None,
-            ipv6_forwarding_enabled: None,
-            use_ndp_proxy: None,
+        references: ReferencesConfig {
+            api_server: args.connector_url.clone(),
+            check_fastapi_vm_id: String::new(),
+            connector_url: args.connector_url.clone(),
         },
-        payment: args
-            .payment_receiver_address
-            .as_ref()
-            .map(|addr| PaymentConfig {
-                payment_receiver_address: Some(addr.clone()),
-            }),
-        computing: Some(ComputingConfig {
-            enable_gpu_support: false,
+        security: SecurityConfig {
+            use_jailer: false,
+            print_system_logs: false,
+            watch_for_updates: true,
+            allow_vm_networking: true,
+            use_developer_ssh_keys: false,
+        },
+        networking: NetworkingConfig {
+            ipv6_address_pool: ipv6_pool,
+            ipv6_allocation_policy: "IPv6AllocationPolicy.static".to_string(),
+            ipv6_subnet_prefix: 124,
+            ipv6_forwarding_enabled: ipv6_enabled,
+            use_ndp_proxy: ipv6_enabled,
+        },
+        debug: DebugConfig {
+            sentry_dsn_configured: false,
+            debug_asyncio: false,
+            execution_log_enabled: false,
+        },
+        payment: PaymentConfig {
+            payment_receiver_address: args.payment_receiver_address.clone(),
+            available_payments: default_available_payments(),
+            payment_monitor_interval: 60.0,
+        },
+        computing: ComputingConfig {
+            enable_qemu_support: true,
+            instance_default_hypervisor: "qemu".to_string(),
             enable_confidential_computing: args.enable_confidential_computing,
-        }),
+            enable_gpu_support: false,
+        },
     };
 
     let state = Arc::new(AppState {
