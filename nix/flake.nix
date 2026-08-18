@@ -197,6 +197,7 @@
           cp ${self.packages.${system}.initrd}/initrd                  image/initrd
           cp ${self.packages.${system}.compose-rootfs}                 image/rootfs.ext4
           cp ${self.packages.${system}.compose-rootfs-verity}/hashtree image/rootfs.ext4.verity
+          cp ${self.packages.${system}.compose-rootfs-verity}/roothash image/rootfs.ext4.roothash
           chmod 0644 image/*
 
           # Deterministic archive: the manifest pins its sha256.
@@ -224,7 +225,8 @@
                 kernel: "image/bzImage",
                 initrd: "image/initrd",
                 platform_rootfs: "image/rootfs.ext4",
-                platform_hash_tree: "image/rootfs.ext4.verity"
+                platform_hash_tree: "image/rootfs.ext4.verity",
+                platform_roothash_file: "image/rootfs.ext4.roothash"
               }
             },
             boot: {
@@ -238,7 +240,7 @@
               { protocol: "aleph.ra-tls", version: "1", transport: { type: "tcp", port: 8443 } }
             ],
             workload: { contract: "aleph.compose/1", upstream_port: 8080 },
-            source: { repo: "https://github.com/aleph-im/aleph-cvm", build: "nix build .#vprogram-compose-bundle" }
+            source: { repo: "https://github.com/aleph-im/aleph-cvm", build: "nix build ./nix#vprogram-compose-bundle" }
           }' > $out/manifest.template.json
         '';
 
