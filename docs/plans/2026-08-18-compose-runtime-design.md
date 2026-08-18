@@ -32,11 +32,13 @@ Built by `nix build ./nix#vprogram-compose-bundle` (flake in `nix/`). The deriva
 | `format` | `"aleph-vprogram-runtime"` | |
 | `format_version` | `1` | |
 | `name` | `"aleph-compose-runtime"` | |
+| `version` | `"2026.08.18"` | runtime build version, distinct from `format_version` |
 | `platform` | `"sev_snp"` | |
 | `bundle.ref` | `"FILL-AFTER-UPLOAD"` in the template | replaced with the bundle's STORE item hash by `scripts/publish-compose-runtime.sh` |
 | `bundle.sha256`, `bundle.size` | computed by nix at build time | the publish script re-verifies `sha256sum bundle.tar.gz` against this before uploading, so a mismatched upload fails loudly instead of publishing a manifest that points at content it doesn't hash-match |
 | `bundle.members` | `{ ovmf, kernel, initrd, platform_rootfs, platform_hash_tree }` | maps the logical roles above to their in-tar paths |
 | `boot.method` | `"qemu-direct-kernel"` | |
+| `boot.kernel_hashes` | `true` | selects OVMF's kernel-hashes measurement mode for direct-kernel boot, folding the kernel, initrd, and cmdline into the SEV-SNP launch measurement (matches `boot.method: qemu-direct-kernel`) |
 | `boot.cpu_models` | `["EPYC-v4"]` | |
 | `boot.platform_roothash` | the rootfs's verity root hash | |
 | `boot.cmdline_template` | `console=ttyS0 root=/dev/mapper/verity-root ro roothash={platform_roothash} workload_roothash={workload_roothash}` | `{platform_roothash}` is filled from `boot.platform_roothash`; `{workload_roothash}` is filled per-V-PROGRAM from the caller's workload volume, computed by the compute node when it attaches that disk |
@@ -63,7 +65,7 @@ Validation (`aleph-compute-node/src/vm/manager.rs::classify_disks`), enforced se
 - **`verified_volume` is rejected outright** in role mode (`UnsupportedRole("verified_volume")`), regardless of position.
 - **At most one `workload` disk.** A second one is rejected (`MultipleWorkloads`).
 - **`rootfs` must be the first disk**, and no other disk may also claim the `rootfs` role (`RootfsNotFirst`).
-- **If a `workload` disk is present, it must be the second disk**, immediately after `rootfs` (`WorkloadNotSecond`).
+- **If a `workload` disk is present, it must be the second disk**, immediately after `rootfs` (`WorkloadNotSecond`). With today's 4-variant `DiskRole` (`Unspecified`, `Rootfs`, `Workload`, `VerifiedVolume`), every other role is filtered out by an earlier check by the time this one runs, so a disk between `rootfs` and `workload` can't actually occur yet and this branch is unreachable in practice; it's reserved for a future role that could legitimately sit at that position.
 
 Once a request passes validation, the VM manager auto-inserts a dm-verity hash tree disk immediately after each data disk it manages verity for. The caller only ever supplies the data disks (with roles); the manager computes and attaches the hash trees itself:
 
@@ -136,14 +138,47 @@ The CLI rejects a compose file containing any of the following (or any key it do
 
 Every failure on both sides of the platform/workload boundary powers the VM off rather than leaving it half-booted and reachable. Nothing here retries or falls back.
 
-**Platform init** (`nix/init.sh`, guest PID 1; applies to both the LUKS and non-LUKS boot branches):
+**Platform init** (`nix/init.sh`, guest PID 1). Every `exec /bin/busybox poweroff -f` in the script (15 call sites) falls into one of these five phases:
+
+Phase A - shared, before the LUKS/non-LUKS split:
+
+| Condition | Action |
+|---|---|
+| No block device (`/dev/vda` or `/dev/sda`) appears within the poll window | `poweroff -f` |
+
+Phase B - LUKS-encrypted rootfs mode (`luks=1`):
+
+| Condition | Action |
+|---|---|
+| LUKS passphrase not injected within 300s | `poweroff -f` |
+| `cryptsetup luksOpen` fails (wrong passphrase / corrupt header) | `poweroff -f` |
+| Mount of `/dev/mapper/cryptroot` fails | `poweroff -f` |
+| `/sbin/init` missing or not executable in the mounted rootfs | `poweroff -f` |
+| Guest `/sbin/init` process exits, for any reason | `poweroff -f` |
+
+Phase C - non-LUKS mode, platform rootfs dm-verity (`roothash` set; this is always the case for a compose V-PROGRAM, whose manifest `cmdline_template` always carries `roothash={platform_roothash}`):
+
+| Condition | Action |
+|---|---|
+| Rootfs hash-tree device `/dev/vdb` not found within the poll window | `poweroff -f` |
+| Rootfs dm-verity verification fails (`veritysetup open` on `/dev/vda` against `/dev/vdb`) - rootfs may be tampered | `poweroff -f` |
+| Mount of `/dev/mapper/verity-root` fails | `poweroff -f` |
+
+Phase D - non-LUKS mode, workload volume dm-verity (`workload_roothash` set; always the case for a compose V-PROGRAM's workload disk). **These are the paths Section 8's image-trust argument rests on**: they're what make it true that podman never sees a workload volume that hasn't already passed dm-verity.
+
+| Condition | Action |
+|---|---|
+| Workload data disk `/dev/vdc` not found within the poll window | `poweroff -f` |
+| Workload hash-tree disk `/dev/vdd` not found within the poll window | `poweroff -f` |
+| Workload dm-verity verification fails (`veritysetup open` on `/dev/vdc` against `/dev/vdd`) | `poweroff -f` |
+| Mount of the verified workload volume fails | `poweroff -f` |
+
+Phase E - non-LUKS mode, common tail (after rootfs, and optionally workload, are mounted):
 
 | Condition | Action |
 |---|---|
 | `/sbin/init` missing or not executable in the mounted rootfs | `poweroff -f` |
 | Guest `/sbin/init` process exits, for any reason | `poweroff -f` |
-| (LUKS branch only) LUKS passphrase not injected within 300s | `poweroff -f` |
-| (LUKS branch only) `cryptsetup luksOpen` fails (wrong passphrase / corrupt header) | `poweroff -f` |
 
 **Compose-runner init** (`nix/compose-rootfs.nix`, the rootfs's own `/sbin/init`, started by platform init as described above):
 
@@ -186,7 +221,7 @@ The consequence: a compose V-PROGRAM that loses its workload volume, or whose st
 ## Verification
 
 - `nix build ./nix#vprogram-compose-bundle` produces a deterministic `bundle.tar.gz` and `manifest.template.json`; `scripts/publish-compose-runtime.sh` re-derives `sha256sum bundle.tar.gz` and fails before uploading if it doesn't match `manifest.bundle.sha256`.
-- `cargo test -p aleph-compute-node` covers `classify_disks` (legacy positional mode, role-mode ordering, `MixedRoleModes`, `RootfsNotFirst`, `WorkloadNotSecond`, `MultipleWorkloads`, and `verified_volume_role_is_not_yet_supported`).
+- `cargo test -p aleph-compute-node` covers `classify_disks` (legacy positional mode, role-mode ordering, `MixedRoleModes`, `RootfsNotFirst`, `MultipleWorkloads`, and `verified_volume_role_is_not_yet_supported`). `WorkloadNotSecond` has no test: it's unreachable with today's 4-variant `DiskRole` (Section 2).
 - Manual hardware checklist, run on an SEV-SNP box via `scripts/deploy-demo-compose.sh`:
   - (a) confirm the demo passes with role-tagged disks
   - (b) confirm a workload volume with the compose file deleted powers off instead of serving 502
