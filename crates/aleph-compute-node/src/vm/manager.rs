@@ -16,7 +16,7 @@ use aleph_network::ndp_proxy::NdpProxy;
 use aleph_network::nftables::NftablesManager;
 use aleph_network::types::{PortForward, Protocol};
 use aleph_tee::traits::TeeBackend;
-use aleph_tee::types::{HugePageSize, TeeType, VmConfig};
+use aleph_tee::types::{DiskConfig, DiskRole, HugePageSize, TeeType, VmConfig};
 
 use crate::network;
 use crate::numa::{NumaAllocator, NumaTopology};
@@ -68,6 +68,55 @@ impl VmInfo {
             numa_node: handle.numa_node,
         }
     }
+}
+
+/// How the disks in a CreateVm request map to guest devices.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum DiskLayoutError {
+    #[error("disks mix explicit roles with unspecified roles; set a role on every disk or on none")]
+    MixedRoleModes,
+    #[error("the rootfs disk must be first (guest init expects it at /dev/vda)")]
+    RootfsNotFirst,
+    #[error("more than one disk has role workload")]
+    MultipleWorkloads,
+    #[error("the workload disk must immediately follow the rootfs (guest init expects /dev/vdc)")]
+    WorkloadNotSecond,
+    #[error("disk role {0} is not supported yet by the guest init")]
+    UnsupportedRole(&'static str),
+}
+
+/// Classify `disks` into the boot layout. Returns whether a workload disk
+/// is present. Two modes: if every disk is `Unspecified`, the legacy
+/// positional convention applies (first disk rootfs, optional second disk
+/// workload). If any disk carries a role, all must (no mixing), the order
+/// is validated instead of assumed, and unsupported roles are rejected.
+pub(crate) fn classify_disks(disks: &[DiskConfig]) -> Result<bool, DiskLayoutError> {
+    let any_role = disks.iter().any(|d| d.role != DiskRole::Unspecified);
+    if !any_role {
+        return Ok(disks.len() > 1);
+    }
+    if disks.iter().any(|d| d.role == DiskRole::Unspecified) {
+        return Err(DiskLayoutError::MixedRoleModes);
+    }
+    if disks.iter().any(|d| d.role == DiskRole::VerifiedVolume) {
+        return Err(DiskLayoutError::UnsupportedRole("verified_volume"));
+    }
+    let workloads = disks
+        .iter()
+        .filter(|d| d.role == DiskRole::Workload)
+        .count();
+    if workloads > 1 {
+        return Err(DiskLayoutError::MultipleWorkloads);
+    }
+    if disks.first().map(|d| d.role) != Some(DiskRole::Rootfs)
+        || disks.iter().skip(1).any(|d| d.role == DiskRole::Rootfs)
+    {
+        return Err(DiskLayoutError::RootfsNotFirst);
+    }
+    if workloads == 1 && disks.get(1).map(|d| d.role) != Some(DiskRole::Workload) {
+        return Err(DiskLayoutError::WorkloadNotSecond);
+    }
+    Ok(workloads == 1)
 }
 
 /// Manages the lifecycle of VMs (both confidential and non-confidential).
@@ -246,7 +295,8 @@ impl VmManager {
         let tee_backend = self.get_backend(config.tee.backend)?;
         let is_confidential = config.tee.backend != TeeType::None;
 
-        // Compute dm-verity for rootfs (first disk) and optional workload volume
+        // Classify the disk layout (see `classify_disks` below), then compute
+        // dm-verity for rootfs (first disk) and optional workload volume
         // (second disk), or skip if LUKS encrypted or non-confidential.
         //
         // Disk layout after verity insertion:
@@ -263,17 +313,24 @@ impl VmManager {
             Some(verity::build_kernel_cmdline(None, None, true))
         } else if let Some(rootfs_disk) = config.disks.first() {
             // Check for a workload volume before mutating the disk list.
-            let has_workload_disk = config.disks.len() > 1;
+            let has_workload_disk = classify_disks(&config.disks)
+                .map_err(|e| anyhow::anyhow!("invalid disk layout: {e}"))?;
 
             let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
                 "dm-verity setup failed — refusing to boot without integrity verification",
             )?;
+            // Role is deliberately Unspecified: this is a hash-tree disk the
+            // manager itself inserted, not one the caller supplied. The
+            // persisted disk list (rootfs, hashtree, ...) is a mixed-role
+            // list by construction and must never be re-fed through
+            // classify_disks; doing so would hit MixedRoleModes.
             config.disks.insert(
                 1,
                 aleph_tee::types::DiskConfig {
                     path: vinfo.hashtree_path,
                     readonly: true,
                     format: "raw".to_string(),
+                    role: aleph_tee::types::DiskRole::Unspecified,
                 },
             );
 
@@ -284,13 +341,18 @@ impl VmManager {
                 let winfo = verity::ensure_verity(&workload_disk.path)
                     .context("dm-verity setup failed for workload volume")?;
                 let wl_hash = winfo.root_hash.clone();
-                // Insert workload hash tree right after the workload volume (index 3)
+                // Insert workload hash tree right after the workload volume (index 3).
+                // Role is deliberately Unspecified for the same reason as the
+                // rootfs hash-tree disk above: it's manager-inserted, not
+                // caller-supplied, and the resulting mixed-role list must
+                // never be re-fed through classify_disks.
                 config.disks.insert(
                     3,
                     aleph_tee::types::DiskConfig {
                         path: winfo.hashtree_path,
                         readonly: true,
                         format: "raw".to_string(),
+                        role: aleph_tee::types::DiskRole::Unspecified,
                     },
                 );
                 info!(vm_id = %vm_id, workload_roothash = %wl_hash, "computed workload volume verity");
@@ -740,5 +802,77 @@ impl VmManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DiskLayoutError, classify_disks};
+    use aleph_tee::types::{DiskConfig, DiskRole};
+
+    fn disk(role: DiskRole) -> DiskConfig {
+        DiskConfig {
+            path: "/tmp/d.img".into(),
+            readonly: true,
+            format: "raw".to_string(),
+            role,
+        }
+    }
+
+    #[test]
+    fn legacy_single_disk_has_no_workload() {
+        assert_eq!(classify_disks(&[disk(DiskRole::Unspecified)]), Ok(false));
+    }
+
+    #[test]
+    fn legacy_two_disks_second_is_workload() {
+        let d = [disk(DiskRole::Unspecified), disk(DiskRole::Unspecified)];
+        assert_eq!(classify_disks(&d), Ok(true));
+    }
+
+    #[test]
+    fn role_mode_rootfs_only() {
+        assert_eq!(classify_disks(&[disk(DiskRole::Rootfs)]), Ok(false));
+    }
+
+    #[test]
+    fn role_mode_rootfs_plus_workload() {
+        let d = [disk(DiskRole::Rootfs), disk(DiskRole::Workload)];
+        assert_eq!(classify_disks(&d), Ok(true));
+    }
+
+    #[test]
+    fn role_mode_requires_rootfs_first() {
+        let d = [disk(DiskRole::Workload), disk(DiskRole::Rootfs)];
+        assert_eq!(classify_disks(&d), Err(DiskLayoutError::RootfsNotFirst));
+    }
+
+    #[test]
+    fn role_mode_rejects_two_workloads() {
+        let d = [
+            disk(DiskRole::Rootfs),
+            disk(DiskRole::Workload),
+            disk(DiskRole::Workload),
+        ];
+        assert_eq!(classify_disks(&d), Err(DiskLayoutError::MultipleWorkloads));
+    }
+
+    #[test]
+    fn mixing_roles_and_unspecified_is_an_error() {
+        let d = [disk(DiskRole::Rootfs), disk(DiskRole::Unspecified)];
+        assert_eq!(classify_disks(&d), Err(DiskLayoutError::MixedRoleModes));
+    }
+
+    #[test]
+    fn verified_volume_role_is_not_yet_supported() {
+        let d = [
+            disk(DiskRole::Rootfs),
+            disk(DiskRole::Workload),
+            disk(DiskRole::VerifiedVolume),
+        ];
+        assert_eq!(
+            classify_disks(&d),
+            Err(DiskLayoutError::UnsupportedRole("verified_volume"))
+        );
     }
 }

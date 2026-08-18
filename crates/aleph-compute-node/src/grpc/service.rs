@@ -18,9 +18,10 @@ use aleph_compute_proto::compute::{
     RemovePortForwardResponse, VmInfo,
 };
 use aleph_network::types::Protocol;
-use aleph_tee::types::{DiskConfig, TeeConfig, TeeType, VmConfig};
+use aleph_tee::types::{DiskConfig, DiskRole, TeeConfig, TeeType, VmConfig};
 
 use crate::vm::VmManager;
+use crate::vm::manager::classify_disks;
 
 /// Maximum VM ID length. Linux TAP interface names are limited to 15 chars
 /// (IFNAMSIZ - 1), and we prefix with "tap-" (4 chars), leaving 11 for the ID.
@@ -251,6 +252,15 @@ impl ComputeNode for ComputeNodeService {
                     "disk path must not contain commas",
                 ));
             }
+            // Validate disk role against allowlist.
+            match d.role.as_str() {
+                "" | "rootfs" | "workload" | "verified_volume" => {}
+                other => {
+                    return Err(Status::invalid_argument(format!(
+                        "unknown disk role {other:?}; expected rootfs, workload, or verified_volume"
+                    )));
+                }
+            }
         }
 
         // Non-confidential disk-boot VMs must have at least one disk
@@ -263,16 +273,35 @@ impl ComputeNode for ComputeNodeService {
         let disks = req
             .disks
             .into_iter()
-            .map(|d| DiskConfig {
-                path: d.path.into(),
-                readonly: d.readonly,
-                format: if d.format.is_empty() {
-                    "raw".to_string()
-                } else {
-                    d.format
-                },
+            .map(|d| {
+                let role = match d.role.as_str() {
+                    "" => DiskRole::Unspecified,
+                    "rootfs" => DiskRole::Rootfs,
+                    "workload" => DiskRole::Workload,
+                    "verified_volume" => DiskRole::VerifiedVolume,
+                    other => unreachable!("disk role {other:?} already validated"),
+                };
+                DiskConfig {
+                    path: d.path.into(),
+                    readonly: d.readonly,
+                    format: if d.format.is_empty() {
+                        "raw".to_string()
+                    } else {
+                        d.format
+                    },
+                    role,
+                }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Validate disk ordering (role mode vs. legacy positional mode,
+        // rootfs-first, at most one workload, workload immediately after
+        // rootfs) before any host-side side effect (IP allocation, TAP
+        // creation, nftables setup) happens in the manager. This runs for
+        // every CreateVm, unlike the manager's own classify_disks call
+        // (vm/manager.rs), which is skipped for LUKS-encrypted and
+        // non-confidential VMs.
+        classify_disks(&disks).map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         // Parse IPv6 request
         let requested_ipv6 = if req.ipv6_address.is_empty() {

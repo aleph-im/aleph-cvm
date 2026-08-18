@@ -33,6 +33,9 @@ message DiskConfig {
   string path = 1;
   bool readonly = 2;
   string format = 3; // "raw", "qcow2"
+  // "", "rootfs", "workload", "verified_volume". Empty means unspecified:
+  // the server falls back to the legacy positional interpretation.
+  string role = 4;
 }
 
 message TeeConfig {

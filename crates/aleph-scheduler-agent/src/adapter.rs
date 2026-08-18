@@ -44,6 +44,7 @@ pub async fn translate_message(
             path: path.display().to_string(),
             readonly: false,
             format: "raw".to_string(),
+            role: String::new(),
         });
     }
 
@@ -58,6 +59,7 @@ pub async fn translate_message(
             path: path.display().to_string(),
             readonly: true,
             format: "squashfs".to_string(),
+            role: String::new(),
         });
     }
 
@@ -72,6 +74,7 @@ pub async fn translate_message(
             path: path.display().to_string(),
             readonly: true,
             format: format!("{:?}", code.encoding).to_lowercase(),
+            role: String::new(),
         });
     }
 
@@ -88,6 +91,7 @@ pub async fn translate_message(
                     path: path.display().to_string(),
                     readonly: true,
                     format: "raw".to_string(),
+                    role: String::new(),
                 });
             }
             MachineVolume::Persistent(v) => {
@@ -103,6 +107,7 @@ pub async fn translate_message(
                         path: path.display().to_string(),
                         readonly: false,
                         format: "qcow2".to_string(),
+                        role: String::new(),
                     });
                 }
                 // Persistent volumes without a parent are created as empty

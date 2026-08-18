@@ -175,4 +175,21 @@ mod tests {
         let cmdline = build_kernel_cmdline(Some("aabb"), Some("ccdd"), true);
         assert_eq!(cmdline, "console=ttyS0 luks=1");
     }
+
+    #[test]
+    fn test_cmdline_matches_published_manifest_template() {
+        // Mirror of boot.cmdline_template in nix/flake.nix's
+        // vprogram-compose-bundle manifest. The CLI instantiates the template
+        // for the SEV-SNP measurement; the manager rebuilds the same string
+        // from roothashes at launch. They must agree byte for byte or the
+        // launch measurement never matches.
+        let template = "console=ttyS0 root=/dev/mapper/verity-root ro roothash={platform_roothash} workload_roothash={workload_roothash}";
+        let instantiated = template
+            .replace("{platform_roothash}", "aabb")
+            .replace("{workload_roothash}", "ccdd");
+        assert_eq!(
+            build_kernel_cmdline(Some("aabb"), Some("ccdd"), false),
+            instantiated
+        );
+    }
 }

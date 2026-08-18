@@ -305,9 +305,9 @@ header "Create VM"
 #   vdb = rootfs.ext4.verity (dm-verity hash tree for rootfs)
 #   vdc = workload.ext4     (docker-compose.yml + OCI images, dm-verity data)
 #   vdd = workload.ext4.verity (dm-verity hash tree for workload)
-# Note: disk ordering matters — init.sh expects this exact layout.
-# However, the VM manager auto-inserts verity hash trees after their data
-# disks, so we only pass the two data disks here.
+# Disk roles are now validated by the server. The VM manager auto-inserts verity
+# hash trees after their data disks, so we only pass the two data disks here with
+# explicit roles (rootfs, workload).
 
 info "Creating VM '${VM_ID}' via gRPC (2 data disks + auto verity)..."
 CREATE_RC=0
@@ -315,8 +315,8 @@ CREATE_RESPONSE=$("$CVM_CLI" --socket "$GRPC_SOCKET" create-vm \
     --vm-id "$VM_ID" \
     --kernel "$KERNEL" \
     --initrd "$INITRD" \
-    --disk "${ROOTFS}:raw:ro" \
-    --disk "${WORKLOAD}:raw:ro" \
+    --disk "${ROOTFS}:raw:ro:rootfs" \
+    --disk "${WORKLOAD}:raw:ro:workload" \
     --vcpus 2 --memory-mb 2048 \
     --tee-backend sev-snp 2>&1) || CREATE_RC=$?
 

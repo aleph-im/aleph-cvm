@@ -30,6 +30,20 @@ pub struct VerificationResult {
     pub details: serde_json::Value,
 }
 
+/// Explicit disk purpose. Replaces the positional convention (rootfs first,
+/// workload second) that misclassified any second disk as the workload.
+/// `Unspecified` keeps the legacy positional interpretation for old callers
+/// and previously persisted VM state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiskRole {
+    #[default]
+    Unspecified,
+    Rootfs,
+    Workload,
+    VerifiedVolume,
+}
+
 /// Configuration for a disk attached to a VM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskConfig {
@@ -38,6 +52,8 @@ pub struct DiskConfig {
     pub readonly: bool,
     #[serde(default = "default_raw")]
     pub format: String,
+    #[serde(default)]
+    pub role: DiskRole,
 }
 
 fn default_true() -> bool {
@@ -250,6 +266,28 @@ mod tests {
         let disk: DiskConfig = serde_json::from_str(json).unwrap();
         assert!(disk.readonly); // default true
         assert_eq!(disk.format, "raw"); // default raw
+    }
+
+    #[test]
+    fn test_disk_role_default_is_unspecified() {
+        // Old persisted VM state has no "role" key; recovery must not break.
+        let json = r#"{"path": "/tmp/disk.img"}"#;
+        let disk: DiskConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(disk.role, DiskRole::Unspecified);
+    }
+
+    #[test]
+    fn test_disk_role_round_trips() {
+        let disk = DiskConfig {
+            path: "/tmp/w.ext4".into(),
+            readonly: true,
+            format: "raw".to_string(),
+            role: DiskRole::Workload,
+        };
+        let json = serde_json::to_string(&disk).unwrap();
+        assert!(json.contains(r#""role":"workload""#));
+        let back: DiskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.role, DiskRole::Workload);
     }
 
     #[test]

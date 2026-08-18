@@ -36,7 +36,13 @@ let
 
   initScript = pkgs.writeText "compose-init" ''
 #!/bin/busybox sh
-set -e
+# Compose-runner init. Fail closed: any failure powers the VM off rather
+# than leaving an attested VM answering on 8443 with no workload behind it.
+
+fatal() {
+    echo "compose-init: FATAL: $1"
+    exec /bin/busybox poweroff -f
+}
 
 export HOME=/root
 export PATH=/bin
@@ -44,32 +50,39 @@ export XDG_RUNTIME_DIR=/run
 export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
 
 # Writable layers containers need (rootfs is read-only dm-verity).
-/bin/busybox mount -t tmpfs tmpfs /run
-/bin/busybox mount -t tmpfs tmpfs /tmp
-/bin/busybox mount -t tmpfs tmpfs /var
+/bin/busybox mount -t tmpfs tmpfs /run || fatal "mount /run failed"
+/bin/busybox mount -t tmpfs tmpfs /tmp || fatal "mount /tmp failed"
+/bin/busybox mount -t tmpfs tmpfs /var || fatal "mount /var failed"
 /bin/busybox mkdir -p /var/lib/containers /var/tmp /var/run /run/containers
 
 # Shared memory for podman lock manager.
 /bin/busybox mkdir -p /dev/shm
-/bin/busybox mount -t tmpfs tmpfs /dev/shm
+/bin/busybox mount -t tmpfs tmpfs /dev/shm || fatal "mount /dev/shm failed"
 
-# Containers need cgroup v2.
-# /sys is bind-mounted by the outer initrd prepare_chroot.
-/bin/busybox mount -t cgroup2 cgroup2 /sys/fs/cgroup
+# Containers need cgroup v2. /sys is bind-mounted by the outer initrd.
+/bin/busybox mount -t cgroup2 cgroup2 /sys/fs/cgroup || fatal "mount cgroup2 failed"
 
-# Load FUSE kernel module for fuse-overlayfs (container layer storage).
-/bin/busybox insmod /lib/modules/fuse.ko 2>&1 || echo "compose-init: warning: insmod fuse.ko failed"
+# fuse-overlayfs is mandatory (storage.conf mount_program); failing here is
+# clearer than the podman error a missing fuse module produces later.
+/bin/busybox insmod /lib/modules/fuse.ko || fatal "insmod fuse.ko failed"
 
-# Load all OCI images from the workload volume.
+# aleph.compose/1 layout: compose file at the volume root, images under
+# images/, at least one archive required.
+[ -f /mnt/workload/docker-compose.yml ] || fatal "no docker-compose.yml in workload volume"
+
+loaded=0
 for tarball in /mnt/workload/images/*.tar; do
     [ -f "$tarball" ] || continue
     echo "compose-init: loading image $tarball"
-    podman load -i "$tarball"
+    podman load -i "$tarball" || fatal "podman load $tarball failed"
+    loaded=$((loaded + 1))
 done
+[ "$loaded" -gt 0 ] || fatal "no image archives under /mnt/workload/images"
 
-# Start the compose stack.
-cd /mnt/workload
-exec podman-compose up --no-build
+cd /mnt/workload || fatal "cd /mnt/workload failed"
+echo "compose-init: starting stack"
+podman-compose up --no-build
+fatal "compose stack exited with status $?"
   '';
 
 in
