@@ -39,3 +39,13 @@ async fn test_attestation_report_measurement() {
     // Boot VM, get attestation report, verify measurement matches expected
     todo!("Requires SEV-SNP hardware and built VM images")
 }
+
+/// Boot the compose runtime with a demo workload volume and verify the
+/// fail-closed contract: the stack answers on 8443, and killing the stack
+/// powers the VM off. Requires SEV-SNP hardware and `nix build
+/// .#vm-compose-demo` artifacts; run via `cargo test -- --ignored` there.
+#[tokio::test]
+#[ignore]
+async fn test_compose_runner_boot() {
+    todo!("Requires SEV-SNP hardware and built VM images")
+}
