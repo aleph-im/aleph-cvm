@@ -319,6 +319,11 @@ impl VmManager {
             let vinfo = verity::ensure_verity(&rootfs_disk.path).context(
                 "dm-verity setup failed — refusing to boot without integrity verification",
             )?;
+            // Role is deliberately Unspecified: this is a hash-tree disk the
+            // manager itself inserted, not one the caller supplied. The
+            // persisted disk list (rootfs, hashtree, ...) is a mixed-role
+            // list by construction and must never be re-fed through
+            // classify_disks; doing so would hit MixedRoleModes.
             config.disks.insert(
                 1,
                 aleph_tee::types::DiskConfig {
@@ -336,7 +341,11 @@ impl VmManager {
                 let winfo = verity::ensure_verity(&workload_disk.path)
                     .context("dm-verity setup failed for workload volume")?;
                 let wl_hash = winfo.root_hash.clone();
-                // Insert workload hash tree right after the workload volume (index 3)
+                // Insert workload hash tree right after the workload volume (index 3).
+                // Role is deliberately Unspecified for the same reason as the
+                // rootfs hash-tree disk above: it's manager-inserted, not
+                // caller-supplied, and the resulting mixed-role list must
+                // never be re-fed through classify_disks.
                 config.disks.insert(
                     3,
                     aleph_tee::types::DiskConfig {
