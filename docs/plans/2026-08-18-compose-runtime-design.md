@@ -102,7 +102,7 @@ Exactly one service in the compose file listens on `127.0.0.1:8080` inside the g
 
 | Key | Notes |
 |---|---|
-| `image` | required; digest-pinned by the CLI before the compose file is written to the workload volume |
+| `image` | required; pinned one of two ways depending on how the CLI resolved it. Registry images are pulled and digest-pinned by the CLI before the compose file is written to the workload volume. Images supplied via `--image-archive` keep their original compose-file reference (e.g. `myapp:latest`) instead of a digest, and are measured as the archive's bytes on the workload volume; the guest matches an archive to its service by the repository tags embedded in the archive, not by a pinned digest |
 | `command` | passed through |
 | `entrypoint` | passed through |
 | `environment` | public and measured: values live in `docker-compose.yml` on the dm-verity-protected workload volume, so they're covered by `workload_roothash` and visible to anyone who can read the volume; there is no mechanism to keep an environment value secret in v1 |
@@ -113,7 +113,7 @@ Exactly one service in the compose file listens on `127.0.0.1:8080` inside the g
 
 ### 5.2 Rejected Keys
 
-The CLI rejects a compose file containing any of the following (or any key it doesn't recognize at all):
+The CLI rejects a compose file containing any of the following (or any key it doesn't recognize at all). A rejected key carrying an explicit null value is treated as absent: YAML null means unset for all of these keys.
 
 | Key | Rejected because |
 |---|---|
