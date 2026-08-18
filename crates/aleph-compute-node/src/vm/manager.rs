@@ -274,6 +274,7 @@ impl VmManager {
                     path: vinfo.hashtree_path,
                     readonly: true,
                     format: "raw".to_string(),
+                    role: aleph_tee::types::DiskRole::Unspecified,
                 },
             );
 
@@ -291,6 +292,7 @@ impl VmManager {
                         path: winfo.hashtree_path,
                         readonly: true,
                         format: "raw".to_string(),
+                        role: aleph_tee::types::DiskRole::Unspecified,
                     },
                 );
                 info!(vm_id = %vm_id, workload_roothash = %wl_hash, "computed workload volume verity");

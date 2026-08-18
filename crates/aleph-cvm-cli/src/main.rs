@@ -155,16 +155,18 @@ async fn connect(socket_path: &std::path::Path) -> Result<ComputeNodeClient<Chan
 
 fn parse_disk(spec: &str) -> Result<DiskConfig> {
     let parts: Vec<&str> = spec.split(':').collect();
-    let (path, format, readonly) = match parts.len() {
-        1 => (parts[0], "raw", false),
-        2 => (parts[0], parts[1], false),
-        3 => (parts[0], parts[1], parts[2] == "ro"),
-        _ => anyhow::bail!("invalid disk spec '{spec}': expected path[:format[:ro|rw]]"),
+    let (path, format, readonly, role) = match parts.len() {
+        1 => (parts[0], "raw", false, ""),
+        2 => (parts[0], parts[1], false, ""),
+        3 => (parts[0], parts[1], parts[2] == "ro", ""),
+        4 => (parts[0], parts[1], parts[2] == "ro", parts[3]),
+        _ => anyhow::bail!("invalid disk spec '{spec}': expected path[:format[:ro|rw[:role]]]"),
     };
     Ok(DiskConfig {
         path: path.to_string(),
         format: format.to_string(),
         readonly,
+        role: role.to_string(),
     })
 }
 
@@ -360,4 +362,18 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_disk_with_role() {
+        let disk = parse_disk("/a.img:raw:ro:workload").unwrap();
+        assert_eq!(disk.path, "/a.img");
+        assert_eq!(disk.format, "raw");
+        assert!(disk.readonly);
+        assert_eq!(disk.role, "workload");
+    }
 }

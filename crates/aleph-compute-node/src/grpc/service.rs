@@ -18,7 +18,7 @@ use aleph_compute_proto::compute::{
     RemovePortForwardResponse, VmInfo,
 };
 use aleph_network::types::Protocol;
-use aleph_tee::types::{DiskConfig, TeeConfig, TeeType, VmConfig};
+use aleph_tee::types::{DiskConfig, DiskRole, TeeConfig, TeeType, VmConfig};
 
 use crate::vm::VmManager;
 
@@ -251,6 +251,15 @@ impl ComputeNode for ComputeNodeService {
                     "disk path must not contain commas",
                 ));
             }
+            // Validate disk role against allowlist.
+            match d.role.as_str() {
+                "" | "rootfs" | "workload" | "verified_volume" => {}
+                other => {
+                    return Err(Status::invalid_argument(format!(
+                        "unknown disk role {other:?}; expected rootfs, workload, or verified_volume"
+                    )));
+                }
+            }
         }
 
         // Non-confidential disk-boot VMs must have at least one disk
@@ -263,14 +272,24 @@ impl ComputeNode for ComputeNodeService {
         let disks = req
             .disks
             .into_iter()
-            .map(|d| DiskConfig {
-                path: d.path.into(),
-                readonly: d.readonly,
-                format: if d.format.is_empty() {
-                    "raw".to_string()
-                } else {
-                    d.format
-                },
+            .map(|d| {
+                let role = match d.role.as_str() {
+                    "" => DiskRole::Unspecified,
+                    "rootfs" => DiskRole::Rootfs,
+                    "workload" => DiskRole::Workload,
+                    "verified_volume" => DiskRole::VerifiedVolume,
+                    other => unreachable!("disk role {other:?} already validated"),
+                };
+                DiskConfig {
+                    path: d.path.into(),
+                    readonly: d.readonly,
+                    format: if d.format.is_empty() {
+                        "raw".to_string()
+                    } else {
+                        d.format
+                    },
+                    role,
+                }
             })
             .collect();
 

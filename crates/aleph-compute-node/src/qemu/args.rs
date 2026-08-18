@@ -111,7 +111,7 @@ pub fn build_qemu_command(
 mod tests {
     use super::*;
     use aleph_tee::sev_snp::SevSnpBackend;
-    use aleph_tee::types::{DiskConfig, TeeConfig, TeeType};
+    use aleph_tee::types::{DiskConfig, DiskRole, TeeConfig, TeeType};
     use std::path::PathBuf;
 
     const TEST_CMDLINE: &str = "console=ttyS0 root=/dev/vda ro";
@@ -140,6 +140,7 @@ mod tests {
             path: PathBuf::from(path),
             readonly: true,
             format: "raw".to_string(),
+            role: DiskRole::Unspecified,
         }
     }
 
@@ -260,11 +261,13 @@ mod tests {
                 path: PathBuf::from("/images/rootfs.ext4"),
                 readonly: true,
                 format: "raw".to_string(),
+                role: DiskRole::Unspecified,
             },
             DiskConfig {
                 path: PathBuf::from("/data/volume.qcow2"),
                 readonly: false,
                 format: "qcow2".to_string(),
+                role: DiskRole::Unspecified,
             },
         ];
         let config = make_config(disks);
@@ -331,6 +334,7 @@ mod tests {
                 path: PathBuf::from("/images/ubuntu.qcow2"),
                 readonly: false,
                 format: "qcow2".to_string(),
+                role: DiskRole::Unspecified,
             }],
             vcpus: 4,
             memory_mb: 2048,
