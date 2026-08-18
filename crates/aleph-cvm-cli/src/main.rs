@@ -43,7 +43,7 @@ enum Command {
         #[arg(long)]
         initrd: String,
 
-        /// Disk specification as path:format:ro|rw (e.g. /data/rootfs.ext4:raw:ro).
+        /// Disk specification as path[:format[:ro|rw[:role]]] where role is rootfs, workload, or verified_volume (e.g. /data/rootfs.ext4:raw:ro:rootfs).
         /// Can be specified multiple times.
         #[arg(long)]
         disk: Vec<String>,

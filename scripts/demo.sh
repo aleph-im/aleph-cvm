@@ -316,7 +316,7 @@ info "Creating VM '${VM_ID}' via gRPC..."
 CREATE_RC=0
 CREATE_RESPONSE=$("$CVM_CLI" --socket "$GRPC_SOCKET" create-vm \
     --vm-id "$VM_ID" --kernel "$KERNEL" --initrd "$INITRD" \
-    --disk "${ROOTFS}:raw:ro" --vcpus 2 --memory-mb 1024 \
+    --disk "${ROOTFS}:raw:ro:rootfs" --vcpus 2 --memory-mb 1024 \
     --tee-backend sev-snp 2>&1) || CREATE_RC=$?
 
 if [[ "$CREATE_RC" -ne 0 ]]; then
