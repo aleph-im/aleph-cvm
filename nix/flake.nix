@@ -183,6 +183,65 @@
           cp ${self.packages.${system}.compose-workload-verity}/roothash $out/workload.ext4.roothash
         '';
 
+        # Publishable V-PROGRAM runtime bundle: a deterministic bundle.tar.gz
+        # of the five compose-runtime boot artifacts plus a manifest template
+        # (aleph-vprogram-runtime/1) describing how to launch it. Consumed by
+        # the aleph-rs CLI, which fills in bundle.ref after uploading the
+        # tarball to storage.
+        vprogram-compose-bundle = pkgs.runCommand "vprogram-compose-bundle" {
+          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.jq ];
+        } ''
+          mkdir -p $out image
+          cp ${ovmfFd}                                                 image/OVMF.fd
+          cp ${self.packages.${system}.kernel}/bzImage                 image/bzImage
+          cp ${self.packages.${system}.initrd}/initrd                  image/initrd
+          cp ${self.packages.${system}.compose-rootfs}                 image/rootfs.ext4
+          cp ${self.packages.${system}.compose-rootfs-verity}/hashtree image/rootfs.ext4.verity
+          chmod 0644 image/*
+
+          # Deterministic archive: the manifest pins its sha256.
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime='UTC 2020-01-01' -cf bundle.tar image
+          gzip -n -9 bundle.tar
+          mv bundle.tar.gz $out/bundle.tar.gz
+
+          sha=$(sha256sum $out/bundle.tar.gz | cut -d' ' -f1)
+          size=$(stat -c%s $out/bundle.tar.gz)
+          roothash=$(cat ${self.packages.${system}.compose-rootfs-verity}/roothash | tr -d '\n')
+
+          jq -n --arg sha "$sha" --argjson size "$size" --arg roothash "$roothash" '{
+            format: "aleph-vprogram-runtime",
+            format_version: 1,
+            name: "aleph-compose-runtime",
+            version: "2026.08.18",
+            platform: "sev_snp",
+            bundle: {
+              ref: "FILL-AFTER-UPLOAD",
+              sha256: $sha,
+              size: $size,
+              members: {
+                ovmf: "image/OVMF.fd",
+                kernel: "image/bzImage",
+                initrd: "image/initrd",
+                platform_rootfs: "image/rootfs.ext4",
+                platform_hash_tree: "image/rootfs.ext4.verity"
+              }
+            },
+            boot: {
+              method: "qemu-direct-kernel",
+              kernel_hashes: true,
+              cpu_models: ["EPYC-v4"],
+              platform_roothash: $roothash,
+              cmdline_template: "console=ttyS0 root=/dev/mapper/verity-root ro roothash={platform_roothash} workload_roothash={workload_roothash}"
+            },
+            attestation: [
+              { protocol: "aleph.ra-tls", version: "1", transport: { type: "tcp", port: 8443 } }
+            ],
+            workload: { contract: "aleph.compose/1", upstream_port: 8080 },
+            source: { repo: "https://github.com/aleph-im/aleph-cvm", build: "nix build .#vprogram-compose-bundle" }
+          }' > $out/manifest.template.json
+        '';
+
         # Compute dm-verity hash tree and root hash for the demo rootfs.
         # The root hash is embedded in the kernel cmdline, binding rootfs
         # integrity to the SEV-SNP measurement.
