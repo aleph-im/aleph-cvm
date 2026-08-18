@@ -126,12 +126,16 @@ if [ "$luks" = "1" ]; then
                 echo "init: mounting /dev/mapper/cryptroot"
                 if /bin/busybox mount -t ext4 /dev/mapper/cryptroot /mnt/root 2>&1; then
                     prepare_chroot
-                    if [ -x /mnt/root/sbin/init ]; then
-                        echo "init: starting /sbin/init from rootfs"
-                        /bin/busybox chroot /mnt/root /sbin/init &
-                    else
-                        echo "init: WARNING: no /sbin/init found in rootfs"
+                    if [ ! -x /mnt/root/sbin/init ]; then
+                        echo "init: FATAL: no /sbin/init found in rootfs"
+                        exec /bin/busybox poweroff -f
                     fi
+                    echo "init: starting /sbin/init from rootfs"
+                    /bin/busybox chroot /mnt/root /sbin/init &
+                    guest_pid=$!
+                    wait "$guest_pid"
+                    echo "init: guest init exited; powering off"
+                    exec /bin/busybox poweroff -f
                 else
                     echo "init: FATAL: failed to mount /dev/mapper/cryptroot"
                     exec /bin/busybox poweroff -f
@@ -257,17 +261,19 @@ else
         fi
 
         prepare_chroot
-        if [ -x /mnt/root/sbin/init ]; then
-            echo "init: starting /sbin/init from rootfs"
-            /bin/busybox chroot /mnt/root /sbin/init &
-        else
-            echo "init: WARNING: no /sbin/init found in rootfs"
+        if [ ! -x /mnt/root/sbin/init ]; then
+            echo "init: FATAL: no /sbin/init found in rootfs"
+            exec /bin/busybox poweroff -f
         fi
+
+        # Start the attestation agent (after rootfs mount in non-LUKS mode).
+        /bin/aleph-attest-agent --port 8443 --upstream http://127.0.0.1:8080 &
+
+        echo "init: starting /sbin/init from rootfs"
+        /bin/busybox chroot /mnt/root /sbin/init &
+        guest_pid=$!
+        wait "$guest_pid"
+        echo "init: guest init exited; powering off"
+        exec /bin/busybox poweroff -f
     fi
-
-    # Start the attestation agent (after rootfs mount in non-LUKS mode).
-    /bin/aleph-attest-agent --port 8443 --upstream http://127.0.0.1:8080 &
 fi
-
-# Wait for children.
-wait
