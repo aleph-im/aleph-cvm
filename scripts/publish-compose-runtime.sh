@@ -6,12 +6,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# mktemp'd below, once we know the manifest's final name; declare here so the
+# trap can safely no-op if we exit before that point.
+manifest=""
+cleanup() {
+    [[ -n "$manifest" ]] && rm -f "$manifest"
+}
+trap cleanup EXIT
+
 out=$(nix build ./nix#vprogram-compose-bundle --print-out-paths --no-link)
 bundle="$out/bundle.tar.gz"
 template="$out/manifest.template.json"
 
+# The aleph CLI auto-selects the storage engine by file size (native
+# `storage` up to 100 MiB, `ipfs` above). fetch_bundle_artifacts (aleph-rs
+# SDK) always downloads the bundle by its `bundle.sha256` against native
+# storage, so an IPFS-engine upload would publish a runtime manifest that
+# points at content the CLI can never fetch. Force native storage
+# explicitly: an oversized bundle then fails loudly here at publish time
+# instead of silently publishing an unfetchable runtime.
 echo "uploading bundle ($(stat -c%s "$bundle") bytes)..." >&2
-bundle_upload=$(aleph file upload "$bundle" --json "$@")
+bundle_upload=$(aleph file upload "$bundle" --storage-engine storage --json "$@")
 bundle_msg=$(jq -r '.item_hash' <<<"$bundle_upload")
 
 # The manifest's sha256 doubles as the storage download key; make sure the
@@ -27,8 +42,7 @@ manifest=$(mktemp)
 jq --arg ref "$bundle_msg" '.bundle.ref = $ref' "$template" > "$manifest"
 
 echo "uploading manifest..." >&2
-manifest_msg=$(aleph file upload "$manifest" --json "$@" | jq -r '.item_hash')
-rm -f "$manifest"
+manifest_msg=$(aleph file upload "$manifest" --storage-engine storage --json "$@" | jq -r '.item_hash')
 
 echo "runtime manifest published. Use with:" >&2
 echo "$manifest_msg"

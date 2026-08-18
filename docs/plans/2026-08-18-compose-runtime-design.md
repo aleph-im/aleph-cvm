@@ -24,6 +24,7 @@ Built by `nix build ./nix#vprogram-compose-bundle` (flake in `nix/`). The deriva
 | `image/initrd` | initrd (contains platform `/init`, `veritysetup`, `cryptsetup`) |
 | `image/rootfs.ext4` | compose-runner rootfs (podman, crun, conmon, fuse-overlayfs, cni-plugins, podman-compose, busybox, slirp4netns) |
 | `image/rootfs.ext4.verity` | dm-verity hash tree for the rootfs above |
+| `image/rootfs.ext4.roothash` | the rootfs's dm-verity root hash, as a bare hex string (same value as `boot.platform_roothash` below) |
 
 `manifest.template.json` fields:
 
@@ -35,8 +36,8 @@ Built by `nix build ./nix#vprogram-compose-bundle` (flake in `nix/`). The deriva
 | `version` | `"2026.08.18"` | runtime build version, distinct from `format_version` |
 | `platform` | `"sev_snp"` | |
 | `bundle.ref` | `"FILL-AFTER-UPLOAD"` in the template | replaced with the bundle's STORE item hash by `scripts/publish-compose-runtime.sh` |
-| `bundle.sha256`, `bundle.size` | computed by nix at build time | the publish script re-verifies `sha256sum bundle.tar.gz` against this before uploading, so a mismatched upload fails loudly instead of publishing a manifest that points at content it doesn't hash-match |
-| `bundle.members` | `{ ovmf, kernel, initrd, platform_rootfs, platform_hash_tree }` | maps the logical roles above to their in-tar paths |
+| `bundle.sha256`, `bundle.size` | computed by nix at build time | the publish script re-verifies `sha256sum bundle.tar.gz` against this after uploading the bundle but before uploading the manifest, so a mismatch fails loudly before the manifest (the gate that matters: it's the manifest that callers resolve and trust) ever points at content that doesn't hash-match |
+| `bundle.members` | `{ ovmf, kernel, initrd, platform_rootfs, platform_hash_tree, platform_roothash_file }` | maps the logical roles above to their in-tar paths; `platform_roothash_file` is additive (the aleph-rs manifest parser ignores unknown member keys, so an older parser tolerates it being present or absent) |
 | `boot.method` | `"qemu-direct-kernel"` | |
 | `boot.kernel_hashes` | `true` | selects OVMF's kernel-hashes measurement mode for direct-kernel boot, folding the kernel, initrd, and cmdline into the SEV-SNP launch measurement (matches `boot.method: qemu-direct-kernel`) |
 | `boot.cpu_models` | `["EPYC-v4"]` | |
@@ -44,9 +45,9 @@ Built by `nix build ./nix#vprogram-compose-bundle` (flake in `nix/`). The deriva
 | `boot.cmdline_template` | `console=ttyS0 root=/dev/mapper/verity-root ro roothash={platform_roothash} workload_roothash={workload_roothash}` | `{platform_roothash}` is filled from `boot.platform_roothash`; `{workload_roothash}` is filled per-V-PROGRAM from the caller's workload volume, computed by the compute node when it attaches that disk |
 | `attestation` | `[{ protocol: "aleph.ra-tls", version: "1", transport: { type: "tcp", port: 8443 } }]` | |
 | `workload` | `{ contract: "aleph.compose/1", upstream_port: 8080 }` | tells the caller (and any future non-compose runtime) which workload contract this runtime expects and which guest port the attestation proxy forwards to |
-| `source` | `{ repo: "https://github.com/aleph-im/aleph-cvm", build: "nix build .#vprogram-compose-bundle" }` | reproducibility pointer, not consumed by the platform |
+| `source` | `{ repo: "https://github.com/aleph-im/aleph-cvm", build: "nix build ./nix#vprogram-compose-bundle" }` | reproducibility pointer, not consumed by the platform |
 
-Publishing: `scripts/publish-compose-runtime.sh` builds the bundle, uploads `bundle.tar.gz` via `aleph file upload`, verifies the local sha256 against the manifest template's declared sha256, patches `bundle.ref` with the bundle's STORE item hash, uploads the patched manifest, and prints the manifest's STORE message hash. That hash is what `aleph vprogram create --runtime <hash>` consumes.
+Publishing: `scripts/publish-compose-runtime.sh` builds the bundle, uploads `bundle.tar.gz` via `aleph file upload --storage-engine storage` (forced explicitly; the CLI would otherwise auto-select `ipfs` above 100 MiB, and `fetch_bundle_artifacts` always fetches by `bundle.sha256` against native storage, so an IPFS upload would publish a runtime nothing could fetch), verifies the local sha256 against the manifest template's declared sha256, patches `bundle.ref` with the bundle's STORE item hash, uploads the patched manifest the same way, and prints the manifest's STORE message hash. That hash is what `aleph vprogram create --runtime <hash>` consumes.
 
 ## 2. Disk Roles and Boot Layout
 
@@ -59,7 +60,7 @@ Publishing: `scripts/publish-compose-runtime.sh` builds the bundle, uploads `bun
 | `"workload"` | Workload volume (compose files + images) |
 | `"verified_volume"` | Reserved; structurally recognized but rejected by the VM manager until guest support lands (Section 6) |
 
-Validation (`aleph-compute-node/src/vm/manager.rs::classify_disks`), enforced server-side on every `CreateVm`:
+Validation (`aleph-compute-node/src/vm/manager.rs::classify_disks`), enforced server-side on every `CreateVm`: the gRPC handler (`grpc/service.rs`) calls it directly on the parsed disk list, right after the role-string allowlist check and before any host-side side effect (IP allocation, TAP creation, nftables setup), so a malformed layout is rejected with `Status::invalid_argument` up front. The VM manager (`vm/manager.rs::create_vm`) also calls it later, but only on the confidential, non-LUKS path, because that's where it needs the workload-disk flag to decide whether to run verity on a second disk; that second call is redundant for validation purposes and exists only to compute `has_workload_disk`.
 
 - **No mixing.** Either every disk in the request carries an explicit role, or none do (all `Unspecified`, legacy mode). A request that mixes the two is rejected (`MixedRoleModes`).
 - **`verified_volume` is rejected outright** in role mode (`UnsupportedRole("verified_volume")`), regardless of position.
@@ -74,7 +75,7 @@ Once a request passes validation, the VM manager auto-inserts a dm-verity hash t
 | 1 (`rootfs` only) | `vda`=rootfs, `vdb`=rootfs hashtree |
 | 2 (`rootfs`, `workload`) | `vda`=rootfs, `vdb`=rootfs hashtree, `vdc`=workload, `vdd`=workload hashtree |
 
-The compute node computes the workload volume's root hash the same way it does the platform rootfs's (`ensure_verity`), and substitutes it into the manifest's `cmdline_template` as `workload_roothash={hash}`, so a compose V-PROGRAM's exact workload content is part of its SEV-SNP measurement, not just its platform rootfs.
+**Authority model.** The published verity artifacts are authoritative, not whatever the compute node happens to derive locally: for the platform rootfs, that's the bundle's `image/rootfs.ext4.verity` and `image/rootfs.ext4.roothash` members (Section 1); for a workload volume, it's the V-PROGRAM message's `VerifiedWorkload`/`VerifiedVolume` ref, `hash_tree`, and `roothash` fields. `ensure_verity` (`crates/aleph-compute-node/src/verity.rs`) is a demo convenience, not the source of truth: it reuses `{path}.verity`/`{path}.roothash` sidecars when both already sit next to the data file - which is how `scripts/demo-compose.sh` stages every disk - and only falls back to running `veritysetup format` itself, with a fresh random salt, when one or both are missing. That fallback re-derivation can never reproduce the salt baked into a published roothash, so the hash it computes never matches the value measured into the manifest's `cmdline_template`. A launcher path that lets a disk reach `ensure_verity` without its published sidecars in place doesn't fail loudly; it silently boots a VM whose SEV-SNP measurement doesn't match the manifest, which fails attestation 100% of the time. `bundle.tar.gz` therefore ships `image/rootfs.ext4.roothash` alongside `image/rootfs.ext4.verity` (Section 1) so the platform rootfs always has its sidecars in place; the workload volume's sidecars are the caller's responsibility to stage the same way.
 
 CLI disk syntax (`aleph-cvm-cli`): `--disk path[:format[:ro|rw[:role]]]`, e.g. `--disk /data/rootfs.ext4:raw:ro:rootfs --disk /data/workload.ext4:raw:ro:workload`.
 
@@ -108,7 +109,7 @@ Exactly one service in the compose file listens on `127.0.0.1:8080` inside the g
 | `depends_on` | passed through to `podman-compose` |
 | `network_mode` | must be `host` on every service (Section 4) |
 | `tmpfs` | passed through |
-| `restart` | accepted and parsed, but ignored in v1: guest failure handling always powers the VM off (Section 7) rather than restarting a container, regardless of what a service declares here |
+| `restart` | passed through verbatim: the CLI does not strip or rewrite it, so `podman-compose` sees and acts on whatever a service declares. At the platform level it has no effect on VM lifecycle: `podman-compose up --no-build` exiting for any reason, including one container's own restart policy giving up, still ends in `poweroff -f` (Section 7) rather than the VM being kept alive by that policy |
 
 ### 5.2 Rejected Keys
 
@@ -132,7 +133,7 @@ The CLI rejects a compose file containing any of the following (or any key it do
 - **`verified_volume` disks, guest-side**: the role value is defined in the proto and recognized by the ordering validator, but the VM manager rejects it (`UnsupportedRole("verified_volume")`) until guest init gains the ability to mount and verify an arbitrary third measured volume. Only `rootfs` and `workload` are usable roles today.
 - **Registry pulls**: no registry is configured anywhere in the compose-runner rootfs (no `registries.conf` entries pointing at a remote), and `podman-compose up --no-build` never pulls. All images must already be on the workload volume as `images/*.tar` (Section 3, Section 8).
 - **Restart policies (V-PROGRAM level)**: the compose `restart:` key is parsed but ignored (Section 5.1). More importantly, there is no platform-level restart-on-crash policy: every guest failure path in Section 7 ends in `poweroff -f` and the VM stays off. A V-PROGRAM is not a batch job in v1; recovering from a stopped V-PROGRAM is an operator action, not automatic.
-- **`resolv.conf` under DHCP**: `nix/init.sh` writes `/etc/resolv.conf` (pointing at the gateway as nameserver) only on the static-IP branch, when the kernel cmdline carries an `ip=` parameter. When the guest instead brings its interface up via DHCP (`udhcpc`), no `resolv.conf` is written, so DNS resolution is unconfigured on that path for both platform init and anything running inside the compose stack. This is a known gap, not fixed as part of this contract.
+- **`resolv.conf` is never actually written for a compose V-PROGRAM**: `nix/init.sh`'s `prepare_chroot()` writes `/mnt/root/etc/resolv.conf` (pointing at the gateway as nameserver) only when `$gateway` is set, which only happens on the static-IP branch (kernel cmdline carries an `ip=` parameter); the DHCP branch (`udhcpc`) never sets it, so DNS is unconfigured there. But even on the static-IP branch the write itself is a no-op in practice: by the time `prepare_chroot()` runs, `/mnt/root` is the dm-verity-protected platform rootfs mounted `ro` (Section 7, Phase C), the script has no `set -e` and none of `prepare_chroot()`'s commands check their exit status, so `echo ... > /mnt/root/etc/resolv.conf` fails with "Read-only file system" and that failure is silently swallowed. The net effect: no compose V-PROGRAM gets a `resolv.conf` today, on either networking path. This is a known gap, not fixed as part of this contract.
 
 ## 7. Guest Failure Semantics (Fail-Closed)
 
@@ -195,6 +196,8 @@ Phase E - non-LUKS mode, common tail (after rootfs, and optionally workload, are
 
 The consequence: a compose V-PROGRAM that loses its workload volume, or whose stack exits on its own, never keeps serving RA-TLS on 8443 with nothing behind it. It goes away instead.
 
+That guarantee is exact for a single-service stack: `podman-compose up` blocking on the one container is what Phase E's "exits, for any reason" hinges on. With multiple services it's weaker. `podman-compose up` (unlike `docker compose up`) does not exit when one of several containers dies; it keeps running and keeps the others up. So if the service on `127.0.0.1:8080` (Section 4) crashes while a sibling service stays alive, `podman-compose up` itself never exits, platform init's Phase E wait never fires, and RA-TLS on 8443 keeps answering with nothing listening behind it on 8080 - the attestation proxy would see connection-refused on every proxied request instead of the VM powering off. The fail-closed guarantee in this section holds for the stack as a whole exiting; it does not cover one service among several dying while its siblings keep `podman-compose up` alive. This is a residual gap, not fixed as part of this contract.
+
 ## 8. Image Trust Model
 
 `/etc/containers/policy.json` in the compose-runner rootfs is `{"default": [{"type": "insecureAcceptAnything"}]}`: podman accepts any image without signature verification. That is normally a dangerous default. It is sound here, and only here, for two reasons that must both hold:
@@ -212,7 +215,7 @@ The consequence: a compose V-PROGRAM that loses its workload volume, or whose st
 - `nix/compose-demo/docker-compose.yml` - demo compose file baked into `compose-workload`
 - `proto/compute.proto` - `DiskConfig.role` (Section 2)
 - `crates/aleph-compute-node/src/vm/manager.rs` - `classify_disks`, `DiskLayoutError`, hash-tree auto-insertion, cmdline construction (Section 2)
-- `crates/aleph-compute-node/src/grpc/service.rs` - role string parsing/validation on `CreateVm`
+- `crates/aleph-compute-node/src/grpc/service.rs` - role string parsing/allowlist validation and the `classify_disks` ordering check on `CreateVm`
 - `crates/aleph-cvm-cli/src/main.rs` - `--disk path:format:ro|rw:role` CLI syntax
 - `scripts/publish-compose-runtime.sh` - builds the bundle, uploads it and the patched manifest to aleph.im STORE (Section 1)
 - `scripts/demo-compose.sh` - local SNP-box demo/test harness (role-tagged disks, health/attestation checks)
@@ -220,7 +223,7 @@ The consequence: a compose V-PROGRAM that loses its workload volume, or whose st
 
 ## Verification
 
-- `nix build ./nix#vprogram-compose-bundle` produces a deterministic `bundle.tar.gz` and `manifest.template.json`; `scripts/publish-compose-runtime.sh` re-derives `sha256sum bundle.tar.gz` and fails before uploading if it doesn't match `manifest.bundle.sha256`.
+- `nix build ./nix#vprogram-compose-bundle` produces a deterministic `bundle.tar.gz` and `manifest.template.json`; `scripts/publish-compose-runtime.sh` re-derives `sha256sum bundle.tar.gz` after uploading the bundle and fails before uploading the manifest if it doesn't match `manifest.bundle.sha256`.
 - `cargo test -p aleph-compute-node` covers `classify_disks` (legacy positional mode, role-mode ordering, `MixedRoleModes`, `RootfsNotFirst`, `MultipleWorkloads`, and `verified_volume_role_is_not_yet_supported`). `WorkloadNotSecond` has no test: it's unreachable with today's 4-variant `DiskRole` (Section 2).
 - Manual hardware checklist, run on an SEV-SNP box via `scripts/deploy-demo-compose.sh`:
   - (a) confirm the demo passes with role-tagged disks
