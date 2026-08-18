@@ -1,5 +1,7 @@
 # Phase 1: Compose Runner Rootfs
 
+> See `docs/plans/2026-08-18-compose-runtime-design.md` for the current `aleph.compose/1` runtime and workload contract (this doc covers only the initial rootfs derivation).
+
 **Goal**: Build a Nix derivation producing a compose-runner ext4 rootfs image containing podman and friends, with a `/sbin/init` that loads OCI images and runs `podman-compose up`.
 
 ## Approach
